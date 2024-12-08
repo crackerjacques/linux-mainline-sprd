@@ -55,8 +55,15 @@ static int panfrost_clks_enable(struct panfrost_device *pfdev, bool on_resume)
 			goto disable_bus_clock;
 	}
 
+	err = clk_prepare_enable(pfdev->mem_clock);
+	if (err)
+		goto disable_bus_ace_clock;
+
 	return 0;
 
+disable_bus_ace_clock:
+	if (on_resume)
+		clk_disable_unprepare(pfdev->bus_ace_clock);
 disable_bus_clock:
 	clk_disable_unprepare(pfdev->bus_clock);
 disable_clock:
@@ -67,6 +74,7 @@ disable_clock:
 
 static void panfrost_clks_disable(struct panfrost_device *pfdev, bool on_suspend)
 {
+	clk_disable_unprepare(pfdev->mem_clock);
 	if (on_suspend)
 		clk_disable_unprepare(pfdev->bus_ace_clock);
 	clk_disable_unprepare(pfdev->bus_clock);
@@ -118,12 +126,30 @@ static int panfrost_clk_init(struct panfrost_device *pfdev)
 	if (err)
 		goto unprepare_bus_clock;
 
-	err = panfrost_clks_enable(pfdev, true);
+	pfdev->mem_clock = devm_clk_get_optional(pfdev->base.dev, "mem");
+	if (IS_ERR(pfdev->mem_clock)) {
+		err = PTR_ERR(pfdev->mem_clock);
+		dev_err(pfdev->base.dev, "get mem_clock failed %d\n", err);
+		goto unprepare_bus_ace_clock;
+	}
+
+	if (pfdev->mem_clock) {
+		rate = clk_get_rate(pfdev->mem_clock);
+		dev_info(pfdev->base.dev, "mem_clock rate = %lu\n", rate);
+	}
+
+	err = clk_prepare(pfdev->mem_clock);
 	if (err)
 		goto unprepare_bus_ace_clock;
 
+	err = panfrost_clks_enable(pfdev, true);
+	if (err)
+		goto unprepare_mem_clock;
+
 	return 0;
 
+unprepare_mem_clock:
+	clk_unprepare(pfdev->mem_clock);
 unprepare_bus_ace_clock:
 	clk_unprepare(pfdev->bus_ace_clock);
 unprepare_bus_clock:
@@ -137,6 +163,7 @@ unprepare_clock:
 static void panfrost_clk_fini(struct panfrost_device *pfdev)
 {
 	panfrost_clks_disable(pfdev, true);
+	clk_unprepare(pfdev->mem_clock);
 	clk_unprepare(pfdev->bus_ace_clock);
 	clk_unprepare(pfdev->bus_clock);
 	clk_unprepare(pfdev->clock);

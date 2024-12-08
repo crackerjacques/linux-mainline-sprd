@@ -81,8 +81,27 @@ static int panfrost_clk_init(struct panfrost_device *pfdev)
 	if (err)
 		goto disable_bus_clock;
 
+	pfdev->mem_clock = devm_clk_get_optional(pfdev->base.dev, "mem");
+	if (IS_ERR(pfdev->mem_clock)) {
+		dev_err(pfdev->base.dev, "get mem_clock failed %ld\n",
+			PTR_ERR(pfdev->mem_clock));
+		err = PTR_ERR(pfdev->mem_clock);
+		goto disable_bus_ace_clock;
+	}
+
+	if (pfdev->mem_clock) {
+		rate = clk_get_rate(pfdev->mem_clock);
+		dev_info(pfdev->base.dev, "mem_clock rate = %lu\n", rate);
+
+		err = clk_prepare_enable(pfdev->mem_clock);
+		if (err)
+			goto disable_bus_ace_clock;
+	}
+
 	return 0;
 
+disable_bus_ace_clock:
+	clk_disable_unprepare(pfdev->bus_ace_clock);
 disable_bus_clock:
 	clk_disable_unprepare(pfdev->bus_clock);
 disable_clock:
@@ -93,6 +112,7 @@ disable_clock:
 
 static void panfrost_clk_fini(struct panfrost_device *pfdev)
 {
+	clk_disable_unprepare(pfdev->mem_clock);
 	clk_disable_unprepare(pfdev->bus_ace_clock);
 	clk_disable_unprepare(pfdev->bus_clock);
 	clk_disable_unprepare(pfdev->clock);
@@ -450,6 +470,10 @@ static int panfrost_device_runtime_resume(struct device *dev)
 		ret = clk_enable(pfdev->bus_ace_clock);
 		if (ret)
 			goto err_bus_ace_clk;
+
+		ret = clk_enable(pfdev->mem_clock);
+		if (ret)
+			goto err_mem_clk;
 	}
 
 	panfrost_device_reset(pfdev, true);
@@ -457,6 +481,9 @@ static int panfrost_device_runtime_resume(struct device *dev)
 
 	return 0;
 
+err_mem_clk:
+	if (pfdev->comp->pm_features & BIT(GPU_PM_RT))
+		clk_disable(pfdev->bus_ace_clock);
 err_bus_ace_clk:
 	if (pfdev->comp->pm_features & BIT(GPU_PM_RT))
 		clk_disable(pfdev->bus_clock);
@@ -483,6 +510,7 @@ static int panfrost_device_runtime_suspend(struct device *dev)
 	panfrost_gpu_power_off(pfdev);
 
 	if (pfdev->comp->pm_features & BIT(GPU_PM_RT)) {
+		clk_disable(pfdev->mem_clock);
 		clk_disable(pfdev->bus_ace_clock);
 		clk_disable(pfdev->bus_clock);
 		clk_disable(pfdev->clock);
@@ -513,11 +541,13 @@ static int panfrost_device_resume(struct device *dev)
 		if (ret)
 			goto err_clk;
 
-		if (pfdev->bus_clock) {
-			ret = clk_enable(pfdev->bus_clock);
-			if (ret)
-				goto err_bus_clk;
-		}
+		ret = clk_enable(pfdev->bus_clock);
+		if (ret)
+			goto err_bus_clk;
+
+		ret = clk_enable(pfdev->mem_clock);
+		if (ret)
+			goto err_mem_clk;
 	}
 
 	ret = pm_runtime_force_resume(dev);
@@ -527,7 +557,10 @@ static int panfrost_device_resume(struct device *dev)
 	return 0;
 
 err_resume:
-	if (pfdev->comp->pm_features & BIT(GPU_PM_CLK_DIS) && pfdev->bus_clock)
+	if (pfdev->comp->pm_features & BIT(GPU_PM_CLK_DIS))
+		clk_disable(pfdev->mem_clock);
+err_mem_clk:
+	if (pfdev->comp->pm_features & BIT(GPU_PM_CLK_DIS))
 		clk_disable(pfdev->bus_clock);
 err_bus_clk:
 	if (pfdev->comp->pm_features & BIT(GPU_PM_CLK_DIS))
@@ -548,9 +581,8 @@ static int panfrost_device_suspend(struct device *dev)
 		return ret;
 
 	if (pfdev->comp->pm_features & BIT(GPU_PM_CLK_DIS)) {
-		if (pfdev->bus_clock)
-			clk_disable(pfdev->bus_clock);
-
+		clk_disable(pfdev->mem_clock);
+		clk_disable(pfdev->bus_clock);
 		clk_disable(pfdev->clock);
 	}
 

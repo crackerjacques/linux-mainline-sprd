@@ -12,6 +12,7 @@ obj-y					+= renesas/
 obj-y					+= riscv/
 obj-y					+= rockchip/
 obj-y					+= samsung/
+obj-y					+= sprd/
 obj-y					+= st/
 obj-y					+= starfive/
 obj-y					+= sunxi/

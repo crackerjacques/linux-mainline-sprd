@@ -35,8 +35,9 @@ struct sprd_pcm_dma_private {
 
 static const struct snd_pcm_hardware sprd_pcm_hardware = {
 	.info = SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_MMAP_VALID |
-		SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_PAUSE |
-		SNDRV_PCM_INFO_RESUME | SNDRV_PCM_INFO_NO_PERIOD_WAKEUP,
+		SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_NONINTERLEAVED |
+		SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_RESUME |
+		SNDRV_PCM_INFO_NO_PERIOD_WAKEUP,
 	.formats = SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S24_LE,
 	.period_bytes_min = 1,
 	.period_bytes_max = 64 * 1024,
@@ -203,6 +204,20 @@ static int sprd_pcm_hw_params(struct snd_soc_component *component,
 	if (!dma_params) {
 		dev_warn(component->dev, "no dma parameters setting\n");
 		return 0;
+	}
+
+	/*
+	 * In interleaved mode, all audio channels are passed through a single
+	 * DMA channel. Whether interleaved mode is used or not depends on the
+	 * constaints set by the CPU DAI.
+	 */
+	switch (params_access(params)) {
+	case SNDRV_PCM_ACCESS_MMAP_INTERLEAVED:
+	case SNDRV_PCM_ACCESS_RW_INTERLEAVED:
+		channels = 1;
+		break;
+	default:
+		break;
 	}
 
 	ret = sprd_pcm_request_dma_channel(component, substream, dma_params,

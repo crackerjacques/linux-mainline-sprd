@@ -30,6 +30,7 @@ obj-y				+= renesas/
 obj-y				+= rockchip/
 obj-$(CONFIG_SOC_SAMSUNG)	+= samsung/
 obj-y				+= sophgo/
+obj-y				+= sprd/
 obj-y				+= st/
 obj-y				+= starfive/
 obj-y				+= sunxi/

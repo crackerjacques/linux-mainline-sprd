@@ -667,7 +667,7 @@ static int sprd_spi_init_hw(struct sprd_spi *ss, struct spi_transfer *t)
 	u16 word_delay, interval;
 	u32 val;
 
-	if (d->unit != SPI_DELAY_UNIT_SCK)
+	if (d->value != 0 && d->unit != SPI_DELAY_UNIT_SCK)
 		return -EINVAL;
 
 	val = readl_relaxed(ss->base + SPRD_SPI_CTL0);

@@ -166,6 +166,26 @@
 	};
 };
 
+&hsphy {
+	status = "okay";
+	phy-supply = <&vddusb33>;
+};
+
+/*
+ * USB. dr_mode MUST stay "otg": the sprd musb glue only registers the
+ * usb_role_switch (/sys/class/usb_role/*) in OTG mode, and this board has no
+ * extcon/VBUS session edge -- the PHY force-asserts VBUS. The gadget session +
+ * D+ pullup are asserted via sprd_otg_switch_set(DEVICE) (drivers/usb/musb/
+ * sprd.c board hack), which the initramfs init triggers by writing "device" to
+ * the role sysfs. dr_mode="peripheral" drops the role switch -> the init dance
+ * no-ops and the gadget never enumerates (host sees -71).
+ * (memory: usb-gadget-otg-and-cleanup)
+ */
+&usb {
+	status = "okay";
+	dr_mode = "otg";
+};
+
 /*
  * ===========================================================================
  * STAGED — blocked on SoC nodes not yet present in upstream 7.1 ums512.dtsi.
@@ -185,8 +205,11 @@
  *       0x00700000 for free). i2c4 pinmux + charger@6a un-staged above.
  *       (memory: charger-aw32257-i2c4-blocker)
  *
- * [ ] USB  (memory: usb-gadget-otg-and-cleanup)  needs hsphy + usb SoC nodes.
- *       board: &hsphy phy-supply=<&vddusb33>; &usb dr_mode="otg" (MUST).
+ * [x] USB  — DONE. Ported hsphy (anlg_phy_g2) + usb@5fff0000 (under soc) SoC
+ *       nodes into ums512.dtsi, and re-applied the board musb DEVICE-case hack
+ *       in drivers/usb/musb/sprd.c (upstream only added OTG_STATE_B_IDLE; it
+ *       still does not assert a gadget session on this VBUS-edge-less board).
+ *       Board &hsphy/&usb un-staged above. (memory: usb-gadget-otg-and-cleanup)
  *
  * [ ] Display  (memory: cold-init-prepare-prev-first; docs/DISPLAY-BRINGUP)
  *       needs: dpu/dsi/disp/iommu_disp + pwm SoC nodes. board: framebuffer

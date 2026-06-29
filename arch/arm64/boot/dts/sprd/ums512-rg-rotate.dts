@@ -41,7 +41,62 @@
 	};
 
 	chosen {
+		#address-cells = <2>;
+		#size-cells = <2>;
 		stdout-path = "serial1:115200n8";
+
+		framebuffer0: framebuffer@9e000000 {
+			compatible = "simple-framebuffer";
+			memory-region = <&framebuffer_region>;
+			width = <720>;
+			height = <720>;
+			stride = <(720 * 4)>;
+			format = "a8r8g8b8";
+			status = "disabled";
+		};
+	};
+
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		framebuffer_region: framebuffer-region@9e000000 {
+			compatible = "framebuffer";
+			reg = <0 0x9e000000 0 (720 * 720 * 4)>;
+			iommu-addresses = <&dpu 0x9e000000 (720 * 720 * 4)>;
+			no-map;
+		};
+
+		linux,cma {
+			compatible = "shared-dma-pool";
+			size = <0x0 0x8000000>;
+			reusable;
+			linux,cma-default;
+		};
+	};
+
+	backlight: backlight {
+		compatible = "pwm-backlight";
+		pwms = <&pwm 2 40000>;
+		max-brightness = <4095>;
+		default-brightness-level = <2650>;
+	};
+
+	lcd_avdd: regulator-lcd-avdd {
+		compatible = "regulator-fixed";
+		regulator-name = "lcd-avdd";
+		gpio = <&ap_gpio 15 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-boot-on;
+	};
+
+	lcd_avee: regulator-lcd-avee {
+		compatible = "regulator-fixed";
+		regulator-name = "lcd-avee";
+		gpio = <&ap_gpio 138 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-boot-on;
 	};
 
 	/*
@@ -166,6 +221,201 @@
 	};
 };
 
+/* Display pipeline. Panel free-runs (see sprd_dpu.c/sprd_dsi.c free-run hack +
+ * docs/DISPLAY-BRINGUP.md). (memory: cold-init-prepare-prev-first) */
+&iommu_disp {
+	status = "okay";
+};
+
+&disp {
+	status = "okay";
+};
+
+&dpu {
+	status = "okay";
+	memory-region = <&framebuffer_region>;
+	reset-syscon = <&ap_ahb_regs 0x04 0x02>;
+};
+
+&pwm {
+	status = "okay";
+};
+
+&dsi {
+	status = "okay";
+	reset-syscon = <&ap_ahb_regs 0x04 0x01>;
+
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	panel@0 {
+		compatible = "rocknix,generic-dsi";
+		reg = <0>;
+		reset-gpios = <&ap_gpio 50 GPIO_ACTIVE_LOW>;
+		backlight = <&backlight>;
+		vdd-supply = <&lcd_avdd>;
+		iovcc-supply = <&lcd_avee>;
+
+		panel_description =
+			"G lanes=2 format=rgb888 size=109,62 flags=3 hs_rate=551488000 lp_rate=20000000 delays=5,50,120,100,50",
+			"M clock=38400 horizontal=720,46,2,52 vertical=720,30,2,25 default=1",
+			"I dcs=ff data=30",
+			"I dcs=ff data=52",
+			"I dcs=ff data=01",
+			"I dcs=e3 data=00",
+			"I dcs=25 data=0a",
+			"I dcs=28 data=5f",
+			"I dcs=29 data=c2",
+			"I dcs=2a data=cf",
+			"I dcs=30 data=58",
+			"I dcs=37 data=9c",
+			"I dcs=38 data=a7",
+			"I dcs=39 data=1f",
+			"I dcs=44 data=00",
+			"I dcs=49 data=3c",
+			"I dcs=59 data=fe",
+			"I dcs=5c data=00",
+			"I dcs=80 data=20",
+			"I dcs=91 data=77",
+			"I dcs=92 data=77",
+			"I dcs=a0 data=55",
+			"I dcs=a1 data=50",
+			"I dcs=a3 data=58",
+			"I dcs=a4 data=9c",
+			"I dcs=a7 data=02",
+			"I dcs=a8 data=01",
+			"I dcs=a9 data=01",
+			"I dcs=aa data=fc",
+			"I dcs=ab data=28",
+			"I dcs=ac data=06",
+			"I dcs=ad data=06",
+			"I dcs=ae data=06",
+			"I dcs=af data=03",
+			"I dcs=b0 data=08",
+			"I dcs=b1 data=26",
+			"I dcs=b2 data=28",
+			"I dcs=b3 data=28",
+			"I dcs=b4 data=03",
+			"I dcs=b5 data=08",
+			"I dcs=b6 data=26",
+			"I dcs=b7 data=08",
+			"I dcs=b8 data=26",
+			"I dcs=c0 data=00",
+			"I dcs=c1 data=00",
+			"I dcs=c2 data=00",
+			"I dcs=c3 data=0f",
+			"I dcs=ff data=30",
+			"I dcs=ff data=52",
+			"I dcs=ff data=02",
+			"I dcs=b0 data=00",
+			"I dcs=b1 data=0f",
+			"I dcs=b2 data=12",
+			"I dcs=b3 data=32",
+			"I dcs=b4 data=24",
+			"I dcs=b5 data=3f",
+			"I dcs=b6 data=25",
+			"I dcs=b7 data=3f",
+			"I dcs=b8 data=0e",
+			"I dcs=b9 data=06",
+			"I dcs=ba data=11",
+			"I dcs=bb data=10",
+			"I dcs=bc data=10",
+			"I dcs=bd data=13",
+			"I dcs=be data=1b",
+			"I dcs=bf data=10",
+			"I dcs=c0 data=17",
+			"I dcs=c1 data=08",
+			"I dcs=d0 data=00",
+			"I dcs=d1 data=0d",
+			"I dcs=d2 data=12",
+			"I dcs=d3 data=2a",
+			"I dcs=d4 data=2e",
+			"I dcs=d5 data=3f",
+			"I dcs=d6 data=29",
+			"I dcs=d7 data=43",
+			"I dcs=d8 data=10",
+			"I dcs=d9 data=08",
+			"I dcs=da data=13",
+			"I dcs=db data=10",
+			"I dcs=dc data=12",
+			"I dcs=dd data=13",
+			"I dcs=de data=1f",
+			"I dcs=df data=1a",
+			"I dcs=e0 data=1f",
+			"I dcs=e1 data=0a",
+			"I dcs=ff data=30",
+			"I dcs=ff data=52",
+			"I dcs=ff data=03",
+			"I dcs=04 data=51",
+			"I dcs=05 data=c0",
+			"I dcs=06 data=c0",
+			"I dcs=08 data=86",
+			"I dcs=09 data=87",
+			"I dcs=0a data=84",
+			"I dcs=0b data=85",
+			"I dcs=28 data=33",
+			"I dcs=29 data=33",
+			"I dcs=2a data=eb",
+			"I dcs=2b data=ea",
+			"I dcs=2c data=ed",
+			"I dcs=2d data=ec",
+			"I dcs=34 data=81",
+			"I dcs=35 data=53",
+			"I dcs=37 data=23",
+			"I dcs=40 data=84",
+			"I dcs=41 data=85",
+			"I dcs=42 data=82",
+			"I dcs=43 data=83",
+			"I dcs=44 data=33",
+			"I dcs=45 data=ea",
+			"I dcs=46 data=e9",
+			"I dcs=47 data=33",
+			"I dcs=48 data=ec",
+			"I dcs=49 data=eb",
+			"I dcs=50 data=80",
+			"I dcs=51 data=81",
+			"I dcs=52 data=02",
+			"I dcs=53 data=01",
+			"I dcs=54 data=33",
+			"I dcs=55 data=ee",
+			"I dcs=56 data=ed",
+			"I dcs=57 data=33",
+			"I dcs=58 data=f0",
+			"I dcs=59 data=ef",
+			"I dcs=80 data=00",
+			"I dcs=81 data=01",
+			"I dcs=82 data=06",
+			"I dcs=83 data=07",
+			"I dcs=84 data=04",
+			"I dcs=85 data=05",
+			"I dcs=92 data=03",
+			"I dcs=93 data=02",
+			"I dcs=96 data=00",
+			"I dcs=97 data=01",
+			"I dcs=98 data=06",
+			"I dcs=99 data=07",
+			"I dcs=9a data=04",
+			"I dcs=9b data=05",
+			"I dcs=a8 data=03",
+			"I dcs=a9 data=02",
+			"I dcs=ff data=30",
+			"I dcs=ff data=52",
+			"I dcs=ff data=00",
+			"I dcs=36 data=01",
+			"I dcs=53 data=2c";
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&dsi_out>;
+			};
+		};
+	};
+};
+
+&dsi_out {
+	remote-endpoint = <&panel_in>;
+};
+
 &hsphy {
 	status = "okay";
 	phy-supply = <&vddusb33>;
@@ -211,11 +461,14 @@
  *       still does not assert a gadget session on this VBUS-edge-less board).
  *       Board &hsphy/&usb un-staged above. (memory: usb-gadget-otg-and-cleanup)
  *
- * [ ] Display  (memory: cold-init-prepare-prev-first; docs/DISPLAY-BRINGUP)
- *       needs: dpu/dsi/disp/iommu_disp + pwm SoC nodes. board: framebuffer
- *       reserved-memory + simple-fb, backlight (pwm 2), lcd_avdd/avee
- *       fixed regulators (ap_gpio 15/138), &dpu/&dsi reset-syscon, panel@0
- *       "rocknix,generic-dsi" w/ panel_description, dsi_out<->panel_in.
+ * [~] Display  — DT DONE, DRIVERS PENDING. Ported dpu/iommu_disp/dsi (mm bus),
+ *       disp, pwm + dphy clocks into ums512.dtsi; board framebuffer/reserved-mem/
+ *       backlight/lcd regs/panel un-staged above. STILL TODO: re-apply the
+ *       load-bearing driver hacks on the (clean) upstream sprd_dpu.c/sprd_dsi.c/
+ *       megacores_pll.c — free-run (DPI_HALT cleared + DSI_MODE_CFG=0),
+ *       prepare_prev_first cold-init + early clock-lane arm, DPI polarity. Needs
+ *       on-device validation. (memory: cold-init-prepare-prev-first;
+ *       docs/DISPLAY-BRINGUP, DISPLAY-KNOWN-GOOD-DSI-STATE)
  *
  * [ ] GPU panfrost  (memory: gpu-panfrost-bringup)
  *       upstream dtsi has only gpu_clk syscon, no mali device node — port it.

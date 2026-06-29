@@ -8,6 +8,15 @@ config DRM_PANEL
 menu "Display Panels"
 	depends on DRM && DRM_PANEL
 
+config DRM_PANEL_GENERIC_DSI
+	tristate "ROCKNIX generic MIPI-DSI panel"
+	depends on OF
+	depends on DRM_MIPI_DSI
+	depends on BACKLIGHT_CLASS_DEVICE
+	help
+	  Generic MIPI-DSI panel driver (ROCKNIX) that reads panel timings and
+	  init sequences from a DT panel_description property or a firmware file.
+
 config DRM_PANEL_ABT_Y030XX067A
 	tristate "ABT Y030XX067A 320x480 LCD panel"
 	depends on OF && SPI

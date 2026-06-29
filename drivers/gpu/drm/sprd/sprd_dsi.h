@@ -94,6 +94,25 @@ struct dphy_pll {
 struct dsi_context {
 	void __iomem *base;
 	struct regmap *regmap;
+	struct regmap *rst_syscon;
+	u32 rst_offset;
+	u32 rst_mask;
+	/*
+	 * DPHY analog block glue. Vendor BSP global_dphy.c plumbing:
+	 * - phy_en_syscon  : enable bits in AP-AHB syscon (set to enable)
+	 * - phy_pwr_syscon : analog shutdown bit in AP-APB syscon
+	 *                   (clear to power up, set to power down)
+	 * Without these the controller-side PHY interface comes up and
+	 * PHY_STATUS reports digital PLL lock, but the lanes can't
+	 * electrically transmit, the DSI never asserts ready, and the
+	 * DPU<->DSI halt handshake stalls.
+	 */
+	struct regmap *phy_en_syscon;
+	u32 phy_en_offset;
+	u32 phy_en_mask;
+	struct regmap *phy_pwr_syscon;
+	u32 phy_pwr_offset;
+	u32 phy_pwr_mask;
 	struct clk *clk;
 	struct dphy_pll pll;
 	struct videomode vm;

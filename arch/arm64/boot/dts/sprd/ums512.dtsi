@@ -885,6 +885,14 @@
 					<17 0x1844>,<19 0x1844>, <21 0x1864>, <30 0x1820>,
 					<35 0x19b8>, <39 0x19ac>;
 			};
+
+			hwlock: hwspinlock@7f0000 {
+				compatible = "sprd,hwspinlock-r3p0";
+				reg = <0x7f0000 0x10000>;
+				#hwlock-cells = <1>;
+				clocks = <&aonapb_gate CLK_SPLK_EB>;
+				clock-names = "enable";
+			};
 		};
 	};
 

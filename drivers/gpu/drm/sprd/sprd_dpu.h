@@ -45,6 +45,8 @@ enum {
 struct dpu_context {
 	void __iomem *base;
 	struct clk *clk;
+	struct clk *pipe_clk;
+	struct clk *dpi_clk;
 	int irq;
 	u8 if_type;
 	struct videomode vm;
@@ -52,6 +54,9 @@ struct dpu_context {
 	wait_queue_head_t wait_queue;
 	bool evt_update;
 	bool evt_stop;
+	struct regmap *rst_syscon;
+	u32 rst_offset;
+	u32 rst_mask;
 };
 
 /**

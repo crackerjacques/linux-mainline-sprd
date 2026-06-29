@@ -66,7 +66,7 @@ static int dphy_calc_pll_param(struct dphy_pll *pll)
 	pll->refin = 3; /* pre-divider bypass */
 	pll->sdm_en = true; /* use fraction N PLL */
 	pll->fdk_s = 0x1; /* fraction */
-	pll->cp_s = 0x0;
+	pll->cp_s = 0x2; /* match vendor sharkl5 BSP charge-pump setting */
 	pll->det_delay = 0x1;
 
 	return 0;
@@ -77,20 +77,24 @@ static void dphy_set_pll_reg(struct dphy_pll *pll, struct regmap *regmap)
 	u8 reg_val[9] = {0};
 	int i;
 
+	/*
+	 * nint (reg 0x06) is written last to match the vendor sharkl5 BSP,
+	 * which commits the integer divider after all other PLL registers.
+	 */
 	u8 reg_addr[] = {
-		0x03, 0x04, 0x06, 0x08, 0x09,
-		0x0a, 0x0b, 0x0e, 0x0f
+		0x03, 0x04, 0x08, 0x09, 0x0a,
+		0x0b, 0x0e, 0x0f, 0x06
 	};
 
 	reg_val[0] = 1 | (1 << 1) |  (pll->lpf_sel << 2);
 	reg_val[1] = pll->div | (1 << 3) | (pll->cp_s << 5) | (pll->fdk_s << 7);
-	reg_val[2] = pll->nint;
-	reg_val[3] = pll->vco_band | (pll->sdm_en << 1) | (pll->refin << 2);
-	reg_val[4] = pll->kint >> 12;
-	reg_val[5] = pll->kint >> 4;
-	reg_val[6] = pll->out_sel | ((pll->kint & 0xf) << 4);
-	reg_val[7] = 1 << 4;
-	reg_val[8] = pll->det_delay;
+	reg_val[2] = pll->vco_band | (pll->sdm_en << 1) | (pll->refin << 2);
+	reg_val[3] = pll->kint >> 12;
+	reg_val[4] = pll->kint >> 4;
+	reg_val[5] = pll->out_sel | ((pll->kint & 0xf) << 4);
+	reg_val[6] = 1 << 4;
+	reg_val[7] = pll->det_delay;
+	reg_val[8] = pll->nint;
 
 	for (i = 0; i < sizeof(reg_addr); ++i) {
 		regmap_write(regmap, reg_addr[i], reg_val[i]);

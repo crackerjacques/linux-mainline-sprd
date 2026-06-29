@@ -8,10 +8,12 @@
 #include <linux/delay.h>
 #include <linux/dma-buf.h>
 #include <linux/io.h>
+#include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_graph.h>
 #include <linux/platform_device.h>
+#include <linux/regmap.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
 
@@ -28,6 +30,8 @@
 #define REG_DPU_VERSION	0x00
 #define REG_DPU_CTRL	0x04
 #define REG_DPU_CFG0	0x08
+#define REG_DPU_CFG1	0x0C
+#define REG_DPU_CFG2	0x10
 #define REG_PANEL_SIZE	0x20
 #define REG_BLEND_SIZE	0x24
 #define REG_BG_COLOR	0x2C
@@ -323,6 +327,7 @@ static void sprd_dpu_layer(struct sprd_dpu *dpu, struct drm_plane_state *state)
 	u32 dst_y = state->crtc_y;
 	u32 alpha = state->alpha;
 	u32 index = state->zpos;
+	static int dump_count;
 	int i;
 
 	offset = (dst_x & 0xffff) | (dst_y << 16);
@@ -359,6 +364,14 @@ static void sprd_dpu_layer(struct sprd_dpu *dpu, struct drm_plane_state *state)
 	blend = drm_blend_to_dpu(state);
 	rotation = drm_rotation_to_dpu(state);
 
+	if (dump_count < 6) {
+		dump_count++;
+		drm_info(dpu->drm,
+			 "LAYDUMP[%d] idx=%u base=%08x size=%08x pitch=%u fmt=%08x num_planes=%u\n",
+			 dump_count, index, addr, size, pitch, format,
+			 fb->format->num_planes);
+	}
+
 	layer_reg_wr(ctx, REG_LAY_CTRL, BIT_DPU_LAY_EN |
 				format |
 				blend |
@@ -369,6 +382,27 @@ static void sprd_dpu_layer(struct sprd_dpu *dpu, struct drm_plane_state *state)
 static void sprd_dpu_flip(struct sprd_dpu *dpu)
 {
 	struct dpu_context *ctx = &dpu->ctx;
+	static int dump_count;
+
+	if (dump_count < 4) {
+		dump_count++;
+		drm_info(dpu->drm,
+			 "DPUDUMP[%d] stopped=%d CTRL=%08x INT_EN=%08x INT_STS=%08x DPI_CTRL=%08x\n",
+			 dump_count, ctx->stopped,
+			 readl(ctx->base + REG_DPU_CTRL),
+			 readl(ctx->base + REG_DPU_INT_EN),
+			 readl(ctx->base + REG_DPU_INT_STS),
+			 readl(ctx->base + REG_DPI_CTRL));
+		drm_info(dpu->drm,
+			 "DPUDUMP[%d] PANEL=%08x LAY_CTRL=%08x LAY_SIZE=%08x LAY_PITCH=%08x LAY_BASE0=%08x LAY_POS=%08x\n",
+			 dump_count,
+			 readl(ctx->base + REG_PANEL_SIZE),
+			 readl(ctx->base + REG_LAY_CTRL),
+			 readl(ctx->base + REG_LAY_SIZE),
+			 readl(ctx->base + REG_LAY_PITCH),
+			 readl(ctx->base + REG_LAY_BASE_ADDR0),
+			 readl(ctx->base + REG_LAY_POS));
+	}
 
 	/*
 	 * Make sure the dpu is in stop status. DPU has no shadow
@@ -383,6 +417,10 @@ static void sprd_dpu_flip(struct sprd_dpu *dpu)
 		if (!ctx->stopped) {
 			dpu_reg_set(ctx, REG_DPU_CTRL, BIT_DPU_REG_UPDATE);
 			dpu_wait_update_done(dpu);
+		} else {
+			dpu_reg_set(ctx, REG_DPU_CTRL, BIT_DPU_RUN);
+			dpu_reg_set(ctx, REG_DPU_CTRL, BIT_DPU_REG_UPDATE);
+			ctx->stopped = false;
 		}
 
 		dpu_reg_set(ctx, REG_DPU_INT_EN, BIT_DPU_INT_ERR);
@@ -393,13 +431,60 @@ static void sprd_dpu_flip(struct sprd_dpu *dpu)
 	}
 }
 
+static void sprd_dpu_reset(struct dpu_context *ctx)
+{
+	if (!ctx->rst_syscon)
+		return;
+
+	regmap_update_bits(ctx->rst_syscon, ctx->rst_offset,
+			   ctx->rst_mask, ctx->rst_mask);
+	udelay(10);
+	regmap_update_bits(ctx->rst_syscon, ctx->rst_offset,
+			   ctx->rst_mask, 0);
+	udelay(10);
+
+	/*
+	 * The DPU is now in a clean, stopped state. Mark it so that the
+	 * follow-up sprd_dpu_init() skips sprd_dpu_stop() - issuing STOP on a
+	 * freshly-reset DPU just times out waiting for a stop-done IRQ and
+	 * leaves it unable to start.
+	 */
+	ctx->stopped = true;
+}
+
+static void sprd_dpi_init(struct sprd_dpu *dpu);
+
 static void sprd_dpu_init(struct sprd_dpu *dpu)
 {
 	struct dpu_context *ctx = &dpu->ctx;
 	u32 int_mask = 0;
-	u32 dpu_version = readl(ctx->base + REG_DPU_VERSION);
+	u32 dpu_version;
+
+	/* clear the bootloader's pinned state so our config can latch */
+	sprd_dpu_reset(ctx);
+
+	/*
+	 * The reset above wipes every DPU register, including the panel size
+	 * and DPI timing that sprd_dpi_init() programmed in mode_set_nofb
+	 * (which runs before this atomic_enable). Re-apply them here, after the
+	 * reset, or the DPU runs with PANEL_SIZE=0 / DPI timing=0 and can never
+	 * complete a frame (reg update done timeout, underflow, black screen).
+	 */
+	sprd_dpi_init(dpu);
+
+	dpu_version = readl(ctx->base + REG_DPU_VERSION);
 
 	writel(0x00, ctx->base + REG_BG_COLOR);
+
+	/*
+	 * DDR QoS (CFG1) and CFG2. Without the QoS priorities the DPU's DDR
+	 * read requests starve and the layer FIFO underflows on the first
+	 * frame (no vsync). Values from the vendor dpu-r4p0 driver:
+	 * awqos_high=0xa awqos_low=0xa arqos_high=0xd arqos_low=0xc | BIT18 | BIT22.
+	 */
+	writel((0xa << 12) | (0xa << 8) | (0xd << 4) | 0xc | BIT(18) | BIT(22),
+	       ctx->base + REG_DPU_CFG1);
+	writel(0x14002, ctx->base + REG_DPU_CFG2);
 
 	if (ctx->if_type == SPRD_DPU_IF_DPI) {
 		/* use dpi as interface */
@@ -411,8 +496,28 @@ static void sprd_dpu_init(struct sprd_dpu *dpu)
 			/* select te from external pad */
 			dpu_reg_set(ctx, REG_DPI_CTRL, BIT_DPU_EDPI_FROM_EXTERNAL_PAD);
 		} else {
-			/* enable Halt function for SPRD DSI */
-			dpu_reg_set(ctx, REG_DPI_CTRL, BIT_DPU_DPI_HALT_EN);
+			/*
+			 * Keep BIT_DPU_DPI_HALT_EN CLEARED (free-running DPI), NOT
+			 * set. The vendor BSP sets it so the DPU's DPI output gates
+			 * on the DSI ready/ack handshake, and an earlier session
+			 * re-enabled it on the theory that the flags=3 burst fix
+			 * (lanes now streaming, PHY_STATUS=0x1f02) had finally made
+			 * the handshake completable.
+			 *
+			 * The two captured dmesg logs (2026-06-26,
+			 * good-fbcon-dmesg.log vs bad-fbcon-dmesg.log) disprove that:
+			 *  - The only state that ever lights the panel (U-Boot
+			 *    handoff, fbcon visible) has DPI_CTRL=0x00000000 AND
+			 *    DSI_MODE_CFG=0x0 -- both halt halves OFF, DPU free-runs.
+			 *  - The black kernel-native state had DPI_CTRL=0x00010000
+			 *    (this HALT_EN bit) AND DSI_MODE_CFG=0x2. Both halves on,
+			 *    lanes park in stopstate (PHY_STATUS=0x1f32), no scanout.
+			 * Enabling the halt handshake has produced a black panel on
+			 * every measurement; free-running is the only proven-good
+			 * config. Pair this with DSI_MODE_CFG=0 in sprd_dsi.c
+			 * (sprd_dsi_set_work_mode). See DISPLAY-KNOWN-GOOD-DSI-STATE.md.
+			 */
+			dpu_reg_clr(ctx, REG_DPI_CTRL, BIT_DPU_DPI_HALT_EN);
 		}
 
 		/* enable dpu update done INT */
@@ -487,6 +592,7 @@ void sprd_dpu_run(struct sprd_dpu *dpu)
 	struct dpu_context *ctx = &dpu->ctx;
 
 	dpu_reg_set(ctx, REG_DPU_CTRL, BIT_DPU_RUN);
+	dpu_reg_set(ctx, REG_DPU_CTRL, BIT_DPU_REG_UPDATE);
 
 	ctx->stopped = false;
 }
@@ -799,6 +905,72 @@ static int sprd_dpu_context_init(struct sprd_dpu *dpu,
 	if (IS_ERR(ctx->clk)) {
 		dev_err(dev, "failed to get DPU core clock\n");
 		return PTR_ERR(ctx->clk);
+	}
+
+	/*
+	 * The "core" clock above is actually CLK_DISPC_EB - the APB enable
+	 * gate that lets us touch DPU registers. The DPU pipeline matrix
+	 * clock (CLK_DISPC0, "dispc0-clk" in clk_summary) is a separate
+	 * thing that vendor's BSP calls clk_dpu_core and explicitly
+	 * prepare_enables. Without it the DPU register block is reachable
+	 * but the pipeline itself can't tick - no scanout, no VSYNC, no
+	 * frames. Until 2026-06 mainline relied on clk_ignore_unused
+	 * leaving the bootloader's rate in place; with proper PM that
+	 * stops working.
+	 */
+	ctx->pipe_clk = devm_clk_get_optional_enabled(dev, "clk");
+	if (IS_ERR(ctx->pipe_clk)) {
+		dev_err(dev, "failed to get DPU pipeline clock\n");
+		return PTR_ERR(ctx->pipe_clk);
+	}
+	if (ctx->pipe_clk) {
+		int ret = clk_set_rate(ctx->pipe_clk, 384000000);
+
+		if (ret)
+			dev_warn(dev, "failed to set pipe clock rate: %d\n", ret);
+	}
+
+	/*
+	 * The DPU "dpi" clock is the pixel clock that feeds the DPI block.
+	 * Mainline only requested "core" so the framework never had a real
+	 * prepare/enable on the pixel clock: on sharkl5pro it only ran at all
+	 * because clk_ignore_unused left the bootloader's rate alone, but the
+	 * clock framework still saw it as unprepared, so transitions and any
+	 * future PM activity would gate it. Without a properly framework-
+	 * prepared pixel clock the DPI block can't drive valid frames into
+	 * the DSI controller, which then never asserts ready and the
+	 * DPU<->DSI halt handshake stalls forever.
+	 */
+	ctx->dpi_clk = devm_clk_get_optional_enabled(dev, "dpi");
+	if (IS_ERR(ctx->dpi_clk)) {
+		dev_err(dev, "failed to get DPU dpi clock\n");
+		return PTR_ERR(ctx->dpi_clk);
+	}
+	if (ctx->dpi_clk) {
+		int ret = clk_set_rate(ctx->dpi_clk, 38400000);
+
+		if (ret)
+			dev_warn(dev, "failed to set dpi clock rate: %d\n", ret);
+	}
+
+	/*
+	 * Optional hardware reset. The bootloader leaves the DPU running and
+	 * (with clk/regulator_ignore_unused) pinned; its shadow registers then
+	 * never latch our config. A soft reset before bring-up clears that.
+	 * reset-syscon = <&ap_ahb_regs offset mask>.
+	 */
+	{
+		u32 args[2];
+
+		ctx->rst_syscon = syscon_regmap_lookup_by_phandle_args(dev->of_node,
+								       "reset-syscon",
+								       2, args);
+		if (IS_ERR(ctx->rst_syscon)) {
+			ctx->rst_syscon = NULL;
+		} else {
+			ctx->rst_offset = args[0];
+			ctx->rst_mask = args[1];
+		}
 	}
 
 	/* disable and clear interrupts before register dpu IRQ. */

@@ -120,6 +120,53 @@
 };
 
 /*
+ * i2c4 SCL/SDA are routed onto the SIMCLK2 / SIMDA2 pads at AF1 with internal
+ * pull-ups (source: vendor u-boot ums512_1h10 pinmap). UMS512 has no dedicated
+ * SCL4/SDA4 pads and the stock pinmux lived in the neutralized dtbo, so it must
+ * be set here or the bus never toggles. NB: sprd DT function naming is
+ * 1-indexed vs the AF number (sprd_pmx_set_mux maps "func2" -> AF1), so I2C4 =
+ * "func2". (memory: charger-aw32257-i2c4-blocker)
+ */
+&pinctrl {
+	i2c4_pin_func: i2c4-pin-func {
+		pins = "UMS512_SIMCLK2", "UMS512_SIMDA2";
+		function = "func2";
+	};
+
+	i2c4_pin_misc: i2c4-pin-misc {
+		pins = "UMS512_SIMCLK2_MISC", "UMS512_SIMDA2_MISC";
+		/* 4700 => WPUS|WPU, matching the u-boot pinmap (strong pull for
+		 * the open-drain i2c lines). */
+		bias-pull-up = <4700>;
+	};
+};
+
+/*
+ * Battery charger. Stock uses an AW32257 (Awinic) at i2c4 0x6a, a register
+ * clone of the TI bq24157/bq24158 — drive it with the mainline bq2415x driver.
+ * Values from the stock dtbo overlay (charger@6a), converted to bq2415x units.
+ */
+&i2c4 {
+	status = "okay";
+	clock-frequency = <400000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c4_pin_func &i2c4_pin_misc>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	charger@6a {
+		compatible = "ti,bq24158";
+		reg = <0x6a>;
+		ti,current-limit = <1800>;
+		ti,weak-battery-voltage = <3400>;
+		ti,battery-regulation-voltage = <4200>;
+		ti,charge-current = <2000>;
+		ti,termination-current = <200>;
+		ti,resistor-sense = <33>;
+	};
+};
+
+/*
  * ===========================================================================
  * STAGED — blocked on SoC nodes not yet present in upstream 7.1 ums512.dtsi.
  * Port each SoC node into the 7.1 dtsi, then un-stage the matching board
@@ -132,10 +179,11 @@
  *       6.16). Configs: PINCTRL_SPRD_UMS512, GPIO_SPRD, GPIO_EIC_SPRD.
  *       (ums9230 pinctrl data does NOT cover ums512 pins — own driver kept.)
  *
- * [ ] ap-apb ranges + i2c4 addressing  (memory: charger-aw32257-i2c4-blocker)
- *       SoC-level: apapb `ranges;` identity + offset child addrs so i2c4
- *       lands at 0x00700000. Then board: i2c4 pinmux on SIMCLK2/SIMDA2
- *       (func2/AF1, WPU) + charger@6a "ti,bq24158".
+ * [x] i2c + charger  — DONE. Ported i2c0..i2c4 controllers into ums512.dtsi
+ *       apb@70000000 (offset addrs; upstream's apb bus ALREADY uses the
+ *       offset-range scheme our 6.16 fix had to add, so i2c4 lands at
+ *       0x00700000 for free). i2c4 pinmux + charger@6a un-staged above.
+ *       (memory: charger-aw32257-i2c4-blocker)
  *
  * [ ] USB  (memory: usb-gadget-otg-and-cleanup)  needs hsphy + usb SoC nodes.
  *       board: &hsphy phy-supply=<&vddusb33>; &usb dr_mode="otg" (MUST).

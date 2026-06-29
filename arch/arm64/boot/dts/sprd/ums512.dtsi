@@ -154,6 +154,12 @@
 		interrupt-affinity = <&CPU6>, <&CPU7>;
 	};
 
+	disp: display-subsystem {
+		compatible = "sprd,display-subsystem";
+		ports = <&dpu_port>;
+		status = "disabled";
+	};
+
 	soc: soc {
 		compatible = "simple-bus";
 		#address-cells = <2>;
@@ -986,6 +992,28 @@
 				compatible = "sprd,ums512-pinctrl";
 				reg = <0x450000 0x3000>;
 			};
+
+			pwm: pwm@260000 {
+				compatible = "sprd,ums512-pwm";
+				reg = <0x260000 0x10000>;
+				clocks = <&aon_clk CLK_PWM0>, <&aonapb_gate CLK_PWM0_EB>,
+					 <&aon_clk CLK_PWM1>, <&aonapb_gate CLK_PWM1_EB>,
+					 <&aon_clk CLK_PWM2>, <&aonapb_gate CLK_PWM2_EB>,
+					 <&aon_clk CLK_PWM3>, <&aonapb_gate CLK_PWM3_EB>;
+				clock-names = "pwm0", "enable0",
+					      "pwm1", "enable1",
+					      "pwm2", "enable2",
+					      "pwm3", "enable3";
+				assigned-clocks = <&aon_clk CLK_PWM0>,
+						  <&aon_clk CLK_PWM1>,
+						  <&aon_clk CLK_PWM2>,
+						  <&aon_clk CLK_PWM3>;
+				assigned-clock-parents = <&ext_26m>,
+							 <&ext_26m>,
+							 <&ext_26m>,
+							 <&ext_26m>;
+				#pwm-cells = <2>;
+			};
 		};
 
 		usb: usb@5fff0000 {
@@ -997,6 +1025,75 @@
 			phys = <&hsphy>;
 			status = "disabled";
 		};
+
+		mm: mm {
+			compatible = "simple-bus";
+			#address-cells = <1>;
+			#size-cells = <1>;
+			ranges = <0x20300000 0x0 0x20300000 0x200000>;
+
+			dpu: dpu@20300000 {
+				compatible = "sprd,ums512-dpu", "sprd,sharkl3-dpu";
+				reg = <0x20300000 0x800>;
+				interrupts = <GIC_SPI 27 IRQ_TYPE_LEVEL_HIGH>;
+				clocks = <&apahb_gate CLK_DISPC_EB>,
+					 <&ap_clk CLK_DISPC0>,
+					 <&ap_clk CLK_DISPC0_DPI>;
+				clock-names = "core", "clk", "dpi";
+				iommus = <&iommu_disp>;
+				status = "disabled";
+
+				dpu_port: port {
+					dpu_out: endpoint {
+						remote-endpoint = <&dsi_in>;
+					};
+				};
+			};
+
+			iommu_disp: iommu@20300800 {
+				compatible = "sprd,ums512-iommu", "sprd,iommu-v1";
+				reg = <0x20300800 0x80>;
+				sprd,iova-range = <0x90000000 0x10000000>;
+				#iommu-cells = <0>;
+				status = "disabled";
+			};
+
+			dsi: dsi@20400000 {
+				compatible = "sprd,ums512-dsi-host", "sprd,ums9230-dsi-host";
+				reg = <0x20400000 0x1000>;
+				interrupts = <GIC_SPI 30 IRQ_TYPE_LEVEL_HIGH>,
+					     <GIC_SPI 31 IRQ_TYPE_LEVEL_HIGH>;
+				clocks = <&apahb_gate CLK_DSI_EB>;
+				clock-names = "pclk";
+
+				/*
+				 * MIPI DPHY analog block glue. Mirrors stock dphy
+				 * node enable-syscon / power-syscon: driver sets
+				 * phy-en bits to enable and clears phy-pwr bit to
+				 * power up the analog driver.
+				 */
+				sprd,phy-en-syscon = <&ap_ahb_regs 0x40 0x03>;
+				sprd,phy-pwr-syscon = <&ap_apb_regs 0x35c 0x08>;
+				status = "disabled";
+
+				ports {
+					#address-cells = <1>;
+					#size-cells = <0>;
+
+					port@0 {
+						reg = <0>;
+						dsi_in: endpoint {
+							remote-endpoint = <&dpu_out>;
+						};
+					};
+
+					port@1 {
+						reg = <1>;
+						dsi_out: endpoint { };
+					};
+				};
+			};
+		};
 	};
 
 	ext_26m: clk-26m {
@@ -1004,6 +1101,20 @@
 		#clock-cells = <0>;
 		clock-frequency = <26000000>;
 		clock-output-names = "ext-26m";
+	};
+
+	dphy_273m: dphy-273m {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <273000000>;
+		clock-output-names = "dphy-273m";
+	};
+
+	dphy_204m8: dphy-204m8 {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <204800000>;
+		clock-output-names = "dphy-204m8";
 	};
 
 	ext_32k: clk-32k {

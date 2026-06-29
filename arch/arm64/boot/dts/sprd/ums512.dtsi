@@ -893,6 +893,21 @@
 				clocks = <&aonapb_gate CLK_SPLK_EB>;
 				clock-names = "enable";
 			};
+
+			ap_gpio: gpio@70000 {
+				compatible = "sprd,ums512-gpio", "sprd,sc9860-gpio";
+				reg = <0x70000 0x10000>;
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+				interrupts = <GIC_SPI 61 IRQ_TYPE_LEVEL_HIGH>;
+			};
+
+			pinctrl: pinctrl@450000 {
+				compatible = "sprd,ums512-pinctrl";
+				reg = <0x450000 0x3000>;
+			};
 		};
 	};
 

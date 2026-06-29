@@ -122,6 +122,76 @@
 			<3558000 15>, <3523000 10>, <3490000 5>,
 			<3412000 0>;
 	};
+
+	/*
+	 * CPU register-level DVFS supply config (real ums512-1h10 silicon
+	 * values from vendor/linux-kernel-4-14-sprd). CPU0 (little) drives its
+	 * DCDC via the SoC top-dvfs ADI path; CPU1 (big) drives the third PMIC
+	 * via the SoC top-dvfs hardware i2c master (chnl-in-i2c = 1) — no Linux
+	 * i2c regulator needed, matching the stock DTB (aon_i2c0 left disabled).
+	 * (memory: thermal-cpufreq-bringup)
+	 */
+	dvfs_dcdc_cpu0_supply: dvfs-dcdc-cpu0-supply {
+		pmic-type-num = <0>;
+		slew-rate = <9375>; /* 9375uV/us */
+		top-dvfs-adi-state = <0x70 0 0xf>;
+		voltage-grade-num = <7>;
+		voltage-grade = <0 0xf0 0xf4 0 0x1ff>,
+			<1 0xf0 0xf4 9 0x1ff>,
+			<2 0x100 0xf4 18 0x1ff>,
+			<3 0x110 0xf8 0 0x1ff>,
+			<4 0x120 0xf8 9 0x1ff>,
+			<5 0x130 0xf8 18 0x1ff>,
+			<6 0x140 0xfc 0 0x1ff>;
+		voltage-up-delay = <50 0x58 0 0xffff 0x600>,
+			<100 0x58 16 0xffff 0xa00>,
+			<150 0x54 0 0xffff 0xf00>,
+			<200 0x54 16 0xffff 0x1400>,
+			<250 0x50 0 0xffff 0x1900>,
+			<300 0x50 16 0xffff 0x1e00>,
+			<350 0x110 0 0xffff 0x2300>;
+		voltage-down-delay = <50 0x64 0 0xffff 0x600>,
+			<100 0x64 16 0xffff 0xa00>,
+			<150 0x60 0 0xffff 0xf00>,
+			<200 0x60 16 0xffff 0x1400>,
+			<250 0x5c 0 0xffff 0x1900>,
+			<300 0x5c 16 0xffff 0x1e00>,
+			<350 0x114 0 0xffff 0x2300>;
+		tuning-latency-us = <0>;
+		chnl-in-i2c = <0>;
+	};
+
+	dvfs_dcdc_cpu1_supply: dvfs-dcdc-cpu1-supply {
+		chnl-i2c-used;
+		third-pmic-used;
+		pmic-type-num = <2>;
+		slew-rate = <4000>; /* 4000uV/us */
+		supply-type-sel = <0x120 0 1>;
+		top-dvfs-i2c-state = <0x9c 4 0xf>;
+		voltage-grade-num = <6>;
+		voltage-grade = <0 0x0f 0x12c 0 0x7f>,
+			<1 0x14 0x12c 7 0x7f>,
+			<2 0x19 0x12c 14 0x7f>,
+			<3 0x1e 0x12c 21 0x7f>,
+			<4 0x23 0x130 0 0x7f>,
+			<5 0x28 0x130 7 0x7f>;
+		voltage-up-delay = <50 0x84 0 0xffff 0x1600>,
+			<100 0x84 16 0xffff 0x1a00>,
+			<150 0x80 0 0xffff 0x1f00>,
+			<200 0x80 16 0xffff 0x2400>,
+			<250 0x7c 0 0xffff 0x2900>,
+			<300 0x7c 16 0xffff 0x2e00>,
+			<350 0x118 0 0xffff 0x3300>;
+		voltage-down-delay = <50 0x90 0 0xffff 0x600>,
+			<100 0x90 16 0xffff 0xa00>,
+			<150 0x8c 0 0xffff 0xf00>,
+			<200 0x8c 16 0xffff 0x1400>,
+			<250 0x88 0 0xffff 0x1900>,
+			<300 0x88 16 0xffff 0x1e00>,
+			<350 0x11c 0 0xffff 0x2300>;
+		tuning-latency-us = <0>;
+		chnl-in-i2c = <1>;
+	};
 };
 
 /* Console + secondary UART. serial1 is the console per /chosen. */
@@ -436,6 +506,30 @@
 	dr_mode = "otg";
 };
 
+/* Mali-G52 MP2 (Bifrost) via mainline panfrost. SoC gpu@60000000 + gpu_opp_table
+ * + pmu power-controller + gpu_clk reset ported into ums512.dtsi.
+ * (memory: gpu-panfrost-bringup) */
+&gpu {
+	mali-supply = <&vddgpu>;
+	status = "okay";
+};
+
+/* Register-level CPU DVFS (sprd-cpufreqhw / hwdvfs — the SMCCC sprd-cpufreq-v2
+ * path is a dead end: stock firmware returns NOT_SUPPORTED for SPRD_SIP_SVC_DVFS_*).
+ * policy0 = cpu0-5 (A55), policy6 = cpu6-7 (A75). dcdc_cpu0/1 cells + cpudvfs_dev
+ * ported into ums512.dtsi. (memory: thermal-cpufreq-bringup) */
+&dcdc_cpu0 {
+	dcdc-supply-mode-cfg = <&dvfs_dcdc_cpu0_supply>;
+};
+
+&dcdc_cpu1 {
+	dcdc-supply-mode-cfg = <&dvfs_dcdc_cpu1_supply>;
+};
+
+&cpudvfs_dev {
+	status = "okay";
+};
+
 /*
  * ===========================================================================
  * STAGED — blocked on SoC nodes not yet present in upstream 7.1 ums512.dtsi.
@@ -461,21 +555,32 @@
  *       still does not assert a gadget session on this VBUS-edge-less board).
  *       Board &hsphy/&usb un-staged above. (memory: usb-gadget-otg-and-cleanup)
  *
- * [x] Display  — DONE (on-device validation pending). DT: dpu/iommu_disp/dsi
+ * [x] Display  — DONE (fbcon confirmed visible on panel). DT: dpu/iommu_disp/dsi
  *       (mm bus), disp, pwm, dphy clocks + board framebuffer/backlight/lcd-regs/
  *       panel. Drivers: the proven 6.16 sprd_dpu/dsi/megacores_pll carried
  *       wholesale (compile clean against 7.1 DRM) — free-run, cold-init reset +
  *       clock prep, prepare_prev_first. (memory: cold-init-prepare-prev-first;
  *       docs/DISPLAY-BRINGUP, DISPLAY-KNOWN-GOOD-DSI-STATE)
  *
- * [ ] GPU panfrost  (memory: gpu-panfrost-bringup)
- *       upstream dtsi has only gpu_clk syscon, no mali device node — port it.
- *       Re-verify sprd_reset_deassert PC=0x0 fix vs reorganized clk/reset.c.
+ * [x] GPU panfrost  — DONE (board &gpu un-staged above). DT: gpu@60000000 +
+ *       gpu_opp_table + pmu power-controller (GPU_TOP/MM/PUBCP) + gpu_clk
+ *       #reset-cells ported into ums512.dtsi; sprd,ums512-power.h +
+ *       ums512-pm-domains.h + pm-domains.c match restored. Drivers: ums512-clk.c
+ *       gained the reset map + reset-controller registration (the reorg's
+ *       ums9230 probe is the model — reset->regmap = data->regmap, so our 6.16
+ *       drvdata PC=0x0 bug does NOT exist upstream). panfrost_drv.c: sprd,ums512-mali
+ *       match → upstream default_pm_rt_data (== our old unisoc_ums512_data).
+ *       (memory: gpu-panfrost-bringup)
  *
- * [ ] cpufreq DVFS  (memory: thermal-cpufreq-bringup)
- *       prefer upstream sprd-cpufreq-v2; board: dvfs_dcdc_cpu0/1 supply cfg +
- *       &dcdc_cpu0/1 dcdc-supply-mode-cfg + &cpudvfs_dev. Re-verify
- *       topology_cluster_id result holds on v2.
+ * [x] cpufreq DVFS  — DONE (board &dcdc_cpu0/1 + &cpudvfs_dev un-staged above).
+ *       CORRECTION to the survey: upstream sprd-cpufreq-v2 is a DEAD END here
+ *       (stock firmware returns NOT_SUPPORTED for every SPRD_SIP_SVC_DVFS_*), so
+ *       we ported the register-level engine (sprd-cpufreqhw + hwdvfs-normal +
+ *       archdata + common + sysfs-normal, ARM_SPRD_CPUFREQ_HW) — compiles clean
+ *       against the 7.1 cpufreq core, carries the topology_cluster_id fix. DT:
+ *       cpufreq_clus0/1 + scu/periph/gic OPP-data, per-CPU cpufreq-data-v1 +
+ *       capacity props, topdvfs_controller (dcdc_cpu0/1/mm/modem cells) +
+ *       cpudvfs_dev@322a8000 ported into ums512.dtsi. (memory: thermal-cpufreq-bringup)
  *
  * [ ] Audio  (memory: audio-bringup; docs/AUDIO-THEORY)
  *       needs codec/VBC/pcm SoC graph. board: i2c2 speaker_amp aw87391@58

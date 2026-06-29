@@ -81,6 +81,7 @@ obj-$(CONFIG_ARM_SCMI_CPUFREQ)		+= scmi-cpufreq.o
 obj-$(CONFIG_ARM_SCPI_CPUFREQ)		+= scpi-cpufreq.o
 obj-$(CONFIG_ARM_SPEAR_CPUFREQ)		+= spear-cpufreq.o
 obj-$(CONFIG_ARM_SPRD_CPUFREQ_V2)	+= sprd-cpufreq-v2.o
+obj-$(CONFIG_ARM_SPRD_CPUFREQ_HW)	+= sprd-cpufreqhw.o sprd-hwdvfs-normal.o sprd-hwdvfs-archdata.o sprd-cpufreq-common.o sprd-sysfs-normal.o
 obj-$(CONFIG_ARM_STI_CPUFREQ)		+= sti-cpufreq.o
 obj-$(CONFIG_ARM_ALLWINNER_SUN50I_CPUFREQ_NVMEM) += sun50i-cpufreq-nvmem.o
 obj-$(CONFIG_ARM_TEGRA20_CPUFREQ)	+= tegra20-cpufreq.o

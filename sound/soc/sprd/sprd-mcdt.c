@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (C) 2019 Spreadtrum Communications Inc.
 
+#include <linux/clk.h>
 #include <linux/errno.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
@@ -9,6 +10,7 @@
 #include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
 #include <linux/spinlock.h>
 
 #include "sprd-mcdt.h"
@@ -116,6 +118,7 @@ enum sprd_mcdt_fifo_sts {
 struct sprd_mcdt_dev {
 	struct device *dev;
 	const struct sprd_mcdt_hw_info *info;
+	struct clk *clk;
 	void __iomem *base;
 	spinlock_t lock;
 	struct sprd_mcdt_chan chan[MCDT_CHANNEL_NUM];
@@ -354,7 +357,7 @@ static irqreturn_t sprd_mcdt_irq_handler(int irq, void *dev_id)
 	struct sprd_mcdt_dev *mcdt = (struct sprd_mcdt_dev *)dev_id;
 	int i;
 
-	guard(spinlock)(&mcdt->lock);
+	spin_lock(&mcdt->lock);
 
 	for (i = 0; i < mcdt->info->num_adc_channels; i++) {
 		if (sprd_mcdt_chan_int_sts(mcdt, i, MCDT_ADC_FIFO_AF_INT)) {
@@ -377,6 +380,8 @@ static irqreturn_t sprd_mcdt_irq_handler(int irq, void *dev_id)
 		}
 	}
 
+	spin_unlock(&mcdt->lock);
+
 	return IRQ_HANDLED;
 }
 
@@ -397,19 +402,22 @@ static irqreturn_t sprd_mcdt_irq_handler(int irq, void *dev_id)
 int sprd_mcdt_chan_write(struct sprd_mcdt_chan *chan, char *tx_buf, u32 size)
 {
 	struct sprd_mcdt_dev *mcdt = chan->mcdt;
+	unsigned long flags;
 	int avail, i = 0, words = size / 4;
 	u32 *buf = (u32 *)tx_buf;
 
-	guard(spinlock_irqsave)(&mcdt->lock);
+	spin_lock_irqsave(&mcdt->lock, flags);
 
 	if (chan->dma_enable) {
 		dev_err(mcdt->dev,
 			"Can not write data when DMA mode enabled\n");
+		spin_unlock_irqrestore(&mcdt->lock, flags);
 		return -EINVAL;
 	}
 
 	if (sprd_mcdt_chan_fifo_sts(mcdt, chan->id, MCDT_DAC_FIFO_REAL_FULL)) {
 		dev_err(mcdt->dev, "Channel fifo is full now\n");
+		spin_unlock_irqrestore(&mcdt->lock, flags);
 		return -EBUSY;
 	}
 
@@ -417,12 +425,14 @@ int sprd_mcdt_chan_write(struct sprd_mcdt_chan *chan, char *tx_buf, u32 size)
 	if (size > avail) {
 		dev_err(mcdt->dev,
 			"Data size is larger than the available fifo size\n");
+		spin_unlock_irqrestore(&mcdt->lock, flags);
 		return -EBUSY;
 	}
 
 	while (i++ < words)
 		sprd_mcdt_dac_write_fifo(mcdt, chan->id, *buf++);
 
+	spin_unlock_irqrestore(&mcdt->lock, flags);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(sprd_mcdt_chan_write);
@@ -443,18 +453,21 @@ EXPORT_SYMBOL_GPL(sprd_mcdt_chan_write);
 int sprd_mcdt_chan_read(struct sprd_mcdt_chan *chan, char *rx_buf, u32 size)
 {
 	struct sprd_mcdt_dev *mcdt = chan->mcdt;
+	unsigned long flags;
 	int i = 0, avail, words = size / 4;
 	u32 *buf = (u32 *)rx_buf;
 
-	guard(spinlock_irqsave)(&mcdt->lock);
+	spin_lock_irqsave(&mcdt->lock, flags);
 
 	if (chan->dma_enable) {
 		dev_err(mcdt->dev, "Can not read data when DMA mode enabled\n");
+		spin_unlock_irqrestore(&mcdt->lock, flags);
 		return -EINVAL;
 	}
 
 	if (sprd_mcdt_chan_fifo_sts(mcdt, chan->id, MCDT_ADC_FIFO_REAL_EMPTY)) {
 		dev_err(mcdt->dev, "Channel fifo is empty\n");
+		spin_unlock_irqrestore(&mcdt->lock, flags);
 		return -EBUSY;
 	}
 
@@ -465,6 +478,7 @@ int sprd_mcdt_chan_read(struct sprd_mcdt_chan *chan, char *rx_buf, u32 size)
 	while (i++ < words)
 		sprd_mcdt_adc_read_fifo(mcdt, chan->id, buf++);
 
+	spin_unlock_irqrestore(&mcdt->lock, flags);
 	return words * 4;
 }
 EXPORT_SYMBOL_GPL(sprd_mcdt_chan_read);
@@ -491,13 +505,23 @@ int sprd_mcdt_chan_int_enable(struct sprd_mcdt_chan *chan, u32 water_mark,
 			      struct sprd_mcdt_chan_callback *cb)
 {
 	struct sprd_mcdt_dev *mcdt = chan->mcdt;
-	int ret = 0;
+	unsigned long flags;
+	int ret;
 
-	guard(spinlock_irqsave)(&mcdt->lock);
+	ret = pm_runtime_get_sync(mcdt->dev);
+	if (ret < 0) {
+		dev_err(mcdt->dev, "Failed to power on: %d\n", ret);
+		return ret;
+	}
+
+	ret = 0;
+
+	spin_lock_irqsave(&mcdt->lock, flags);
 
 	if (chan->dma_enable || chan->int_enable) {
 		dev_err(mcdt->dev, "Failed to set interrupt mode.\n");
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out;
 	}
 
 	switch (chan->type) {
@@ -522,12 +546,16 @@ int sprd_mcdt_chan_int_enable(struct sprd_mcdt_chan *chan, u32 water_mark,
 	default:
 		dev_err(mcdt->dev, "Unsupported channel type\n");
 		ret = -EINVAL;
+		goto out;
 	}
 
-	if (!ret) {
-		chan->cb = cb;
-		chan->int_enable = true;
-	}
+	chan->cb = cb;
+	chan->int_enable = true;
+
+out:
+	spin_unlock_irqrestore(&mcdt->lock, flags);
+	if (ret)
+		pm_runtime_put(mcdt->dev);
 
 	return ret;
 }
@@ -540,12 +568,14 @@ EXPORT_SYMBOL_GPL(sprd_mcdt_chan_int_enable);
 void sprd_mcdt_chan_int_disable(struct sprd_mcdt_chan *chan)
 {
 	struct sprd_mcdt_dev *mcdt = chan->mcdt;
+	unsigned long flags;
 
-	guard(spinlock_irqsave)(&mcdt->lock);
+	spin_lock_irqsave(&mcdt->lock, flags);
 
-	if (!chan->int_enable)
+	if (!chan->int_enable) {
+		spin_unlock_irqrestore(&mcdt->lock, flags);
 		return;
-
+	}
 
 	switch (chan->type) {
 	case SPRD_MCDT_ADC_CHAN:
@@ -567,6 +597,9 @@ void sprd_mcdt_chan_int_disable(struct sprd_mcdt_chan *chan)
 	}
 
 	chan->int_enable = false;
+	spin_unlock_irqrestore(&mcdt->lock, flags);
+
+	pm_runtime_put(mcdt->dev);
 }
 EXPORT_SYMBOL_GPL(sprd_mcdt_chan_int_disable);
 
@@ -587,14 +620,24 @@ int sprd_mcdt_chan_dma_enable(struct sprd_mcdt_chan *chan,
 			      u32 water_mark)
 {
 	struct sprd_mcdt_dev *mcdt = chan->mcdt;
-	int ret = 0;
+	unsigned long flags;
+	int ret;
 
-	guard(spinlock_irqsave)(&mcdt->lock);
+	ret = pm_runtime_get_sync(mcdt->dev);
+	if (ret < 0) {
+		dev_err(mcdt->dev, "Failed to power on: %d\n", ret);
+		return ret;
+	}
+
+	ret = 0;
+
+	spin_lock_irqsave(&mcdt->lock, flags);
 
 	if (chan->dma_enable || chan->int_enable ||
 	    dma_chan > SPRD_MCDT_DMA_CH4) {
 		dev_err(mcdt->dev, "Failed to set DMA mode\n");
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out;
 	}
 
 	switch (chan->type) {
@@ -619,10 +662,15 @@ int sprd_mcdt_chan_dma_enable(struct sprd_mcdt_chan *chan,
 	default:
 		dev_err(mcdt->dev, "Unsupported channel type\n");
 		ret = -EINVAL;
+		goto out;
 	}
 
-	if (!ret)
-		chan->dma_enable = true;
+	chan->dma_enable = true;
+
+out:
+	spin_unlock_irqrestore(&mcdt->lock, flags);
+	if (ret)
+		pm_runtime_put(mcdt->dev);
 
 	return ret;
 }
@@ -635,11 +683,14 @@ EXPORT_SYMBOL_GPL(sprd_mcdt_chan_dma_enable);
 void sprd_mcdt_chan_dma_disable(struct sprd_mcdt_chan *chan)
 {
 	struct sprd_mcdt_dev *mcdt = chan->mcdt;
+	unsigned long flags;
 
-	guard(spinlock_irqsave)(&mcdt->lock);
+	spin_lock_irqsave(&mcdt->lock, flags);
 
-	if (!chan->dma_enable)
+	if (!chan->dma_enable) {
+		spin_unlock_irqrestore(&mcdt->lock, flags);
 		return;
+	}
 
 	switch (chan->type) {
 	case SPRD_MCDT_ADC_CHAN:
@@ -656,7 +707,9 @@ void sprd_mcdt_chan_dma_disable(struct sprd_mcdt_chan *chan)
 		break;
 	}
 
+	pm_runtime_put(mcdt->dev);
 	chan->dma_enable = false;
+	spin_unlock_irqrestore(&mcdt->lock, flags);
 }
 EXPORT_SYMBOL_GPL(sprd_mcdt_chan_dma_disable);
 
@@ -672,7 +725,7 @@ struct sprd_mcdt_chan *sprd_mcdt_request_chan(u8 channel,
 {
 	struct sprd_mcdt_chan *temp;
 
-	guard(mutex)(&sprd_mcdt_list_mutex);
+	mutex_lock(&sprd_mcdt_list_mutex);
 
 	list_for_each_entry(temp, &sprd_mcdt_chan_list, list) {
 		if (temp->type == type && temp->id == channel) {
@@ -683,6 +736,8 @@ struct sprd_mcdt_chan *sprd_mcdt_request_chan(u8 channel,
 
 	if (list_entry_is_head(temp, &sprd_mcdt_chan_list, list))
 		temp = NULL;
+
+	mutex_unlock(&sprd_mcdt_list_mutex);
 
 	return temp;
 }
@@ -699,14 +754,17 @@ void sprd_mcdt_free_chan(struct sprd_mcdt_chan *chan)
 	sprd_mcdt_chan_dma_disable(chan);
 	sprd_mcdt_chan_int_disable(chan);
 
-	guard(mutex)(&sprd_mcdt_list_mutex);
+	mutex_lock(&sprd_mcdt_list_mutex);
 
 	list_for_each_entry(temp, &sprd_mcdt_chan_list, list) {
-		if (temp == chan)
+		if (temp == chan) {
+			mutex_unlock(&sprd_mcdt_list_mutex);
 			return;
+		}
 	}
 
 	list_add_tail(&chan->list, &sprd_mcdt_chan_list);
+	mutex_unlock(&sprd_mcdt_list_mutex);
 }
 EXPORT_SYMBOL_GPL(sprd_mcdt_free_chan);
 
@@ -731,41 +789,62 @@ static void sprd_mcdt_init_chans(struct sprd_mcdt_dev *mcdt,
 		chan->mcdt = mcdt;
 		INIT_LIST_HEAD(&chan->list);
 
-		scoped_guard(mutex, &sprd_mcdt_list_mutex)
-			list_add_tail(&chan->list, &sprd_mcdt_chan_list);
+		mutex_lock(&sprd_mcdt_list_mutex);
+		list_add_tail(&chan->list, &sprd_mcdt_chan_list);
+		mutex_unlock(&sprd_mcdt_list_mutex);
 	}
 }
 
 static int sprd_mcdt_probe(struct platform_device *pdev)
 {
+	struct device *dev = &pdev->dev;
 	struct sprd_mcdt_dev *mcdt;
 	struct resource *res;
 	int ret, irq;
 
-	mcdt = devm_kzalloc(&pdev->dev, sizeof(*mcdt), GFP_KERNEL);
+	mcdt = devm_kzalloc(dev, sizeof(*mcdt), GFP_KERNEL);
 	if (!mcdt)
 		return -ENOMEM;
 
-	mcdt->info = of_device_get_match_data(&pdev->dev);
+	mcdt->dev = dev;
+	spin_lock_init(&mcdt->lock);
+	platform_set_drvdata(pdev, mcdt);
+
+	mcdt->info = of_device_get_match_data(dev);
 	if (!mcdt->info)
 		return -EINVAL;
+
+	mcdt->clk = devm_clk_get_optional(dev, NULL);
+	if (IS_ERR(mcdt->clk))
+		return dev_err_probe(dev, PTR_ERR(mcdt->clk),
+				     "cannot get clock");
+
+	ret = clk_prepare_enable(mcdt->clk);
+	if (ret) {
+		dev_err(dev, "cannot enable clock\n");
+		return ret;
+	}
+
+	pm_runtime_set_autosuspend_delay(dev, 3000);
+	pm_runtime_use_autosuspend(dev);
+	pm_runtime_mark_last_busy(dev);
+	pm_runtime_set_active(dev);
+	ret = devm_pm_runtime_enable(dev);
+	if (ret)
+		return ret;
 
 	mcdt->base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
 	if (IS_ERR(mcdt->base))
 		return PTR_ERR(mcdt->base);
 
-	mcdt->dev = &pdev->dev;
-	spin_lock_init(&mcdt->lock);
-	platform_set_drvdata(pdev, mcdt);
-
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
 		return irq;
 
-	ret = devm_request_irq(&pdev->dev, irq, sprd_mcdt_irq_handler,
+	ret = devm_request_irq(dev, irq, sprd_mcdt_irq_handler,
 			       0, "sprd-mcdt", mcdt);
 	if (ret) {
-		dev_err(&pdev->dev, "Failed to request MCDT IRQ\n");
+		dev_err(dev, "Failed to request MCDT IRQ\n");
 		return ret;
 	}
 
@@ -778,15 +857,39 @@ static void sprd_mcdt_remove(struct platform_device *pdev)
 {
 	struct sprd_mcdt_chan *chan, *temp;
 
-	guard(mutex)(&sprd_mcdt_list_mutex);
+	mutex_lock(&sprd_mcdt_list_mutex);
 
 	list_for_each_entry_safe(chan, temp, &sprd_mcdt_chan_list, list)
 		list_del(&chan->list);
+
+	mutex_unlock(&sprd_mcdt_list_mutex);
 }
+
+static int __maybe_unused sprd_mcdt_runtime_suspend(struct device *dev)
+{
+	struct sprd_mcdt_dev *mdev = dev_get_drvdata(dev);
+
+	clk_disable_unprepare(mdev->clk);
+
+	return 0;
+}
+
+static int __maybe_unused sprd_mcdt_runtime_resume(struct device *dev)
+{
+	struct sprd_mcdt_dev *mdev = dev_get_drvdata(dev);
+
+	return clk_prepare_enable(mdev->clk);
+}
+
+static const struct dev_pm_ops sprd_mcdt_pm_ops = {
+	SET_RUNTIME_PM_OPS(sprd_mcdt_runtime_suspend,
+			   sprd_mcdt_runtime_resume, NULL)
+};
 
 static const struct of_device_id sprd_mcdt_of_match[] = {
 	{ .compatible = "sprd,sc9860-mcdt", .data = &sprd_mcdt_r1_info },
 	{ .compatible = "sprd,ums9230-mcdt", .data = &sprd_mcdt_r2_info },
+	{ .compatible = "sprd,ums512-mcdt", .data = &sprd_mcdt_r1_info },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, sprd_mcdt_of_match);
@@ -797,6 +900,7 @@ static struct platform_driver sprd_mcdt_driver = {
 	.driver = {
 		.name = "sprd-mcdt",
 		.of_match_table = sprd_mcdt_of_match,
+		.pm = &sprd_mcdt_pm_ops,
 	},
 };
 

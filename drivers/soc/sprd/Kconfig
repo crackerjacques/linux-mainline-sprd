@@ -10,4 +10,12 @@ config SPRD_AGDSP
 	  Say y here to enable support for communication with the audio
 	  DSP found in Spreadtrum/Unisoc SoCs.
 
+config SPRD_AUDCP_BOOT
+	tristate "Audio DSP (AUDCP) boot support"
+	depends on ARCH_SPRD || COMPILE_TEST
+	help
+	  Say y here to load firmware into and boot the audio co-processor
+	  (AUDCP / AGDSP) on Spreadtrum/Unisoc SoCs, so the sprd-agdsp IPC
+	  and ASoC audio stack can communicate with it.
+
 endmenu

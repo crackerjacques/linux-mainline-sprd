@@ -1938,6 +1938,26 @@
 					nvmem-cell-names = "sen_delta_cal";
 				};
 			};
+
+			/*
+			 * AP watchdog. Hardware only starts counting once userspace
+			 * opens /dev/watchdogN (sprd_wdt_start(), not armed by the
+			 * bootloader or on probe - confirmed in sprd_wdt.c), so this
+			 * is a pure add: no risk of an unfed bootloader-armed timer
+			 * biting before hw-watchdog.service starts feeding it.
+			 * timeout-sec is set well above the service's 2s feed
+			 * interval (6.16 used 12s) for margin against a stalled feed
+			 * loop; SPRD_WDT_MAX_TIMEOUT is 60s.
+			 */
+			watchdog@2f0000 {
+				compatible = "sprd,ums512-wdt", "sprd,sp9860-wdt";
+				reg = <0x2f0000 0x10000>;
+				interrupts = <GIC_SPI 79 IRQ_TYPE_LEVEL_HIGH>;
+				timeout-sec = <30>;
+				clock-names = "enable", "rtc_enable";
+				clocks = <&aonapb_gate CLK_APCPU_WDG_EB>,
+					 <&aonapb_gate CLK_AC_WDG_RTC_EB>;
+			};
 		};
 
 		usb: usb@5fff0000 {

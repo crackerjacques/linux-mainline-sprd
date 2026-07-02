@@ -238,8 +238,15 @@
  * microSD. Claim the SD core/IO supplies so the regulator framework keeps
  * them powered without regulator_ignore_unused. Mainline sdhci-sprd sets
  * SDHCI_QUIRK_BROKEN_CARD_DETECTION and ignores the stock syscon card
- * detect; there is no dedicated CD GPIO on this board, so fall back to
- * mmc-core polling via broken-cd. (memory: sdcard-sdio0-bringup)
+ * detect; there is no dedicated CD GPIO on this board. `broken-cd` alone
+ * (mmc-core polling via MMC_CAP_NEEDS_POLL) caused a periodic "Got command
+ * interrupt ... even though no command operation was in progress" pr_err +
+ * register dump every poll cycle - confirmed on-device to be the detect
+ * poll's status command racing a stray/duplicate command-complete IRQ on
+ * the SPRD controller. `non-removable` skips the periodic poll entirely
+ * (one-shot enumeration at boot), which eliminates the spurious IRQ.
+ * Trade-off: no hot-swap detection without a reboot. (memory:
+ * sdcard-sdio0-bringup)
  */
 &sdio0 {
 	status = "okay";
@@ -249,6 +256,7 @@
 	no-sdio;
 	no-mmc;
 	broken-cd;
+	non-removable;
 	sprd,phy-delay-sd-uhs-sdr104 = <0x7f 0x73 0x72 0x72>;
 	sprd,phy-delay-sd-uhs-sdr50 = <0x6e 0x7f 0x01 0x01>;
 	sprd,phy-delay-sd-highspeed = <0x7f 0x1a 0x9a 0x9a>;

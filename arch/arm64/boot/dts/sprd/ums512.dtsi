@@ -327,6 +327,81 @@
 		status = "disabled";
 	};
 
+	/*
+	 * Audio DSP (AGDSP) power domain. Models the AGCP/audio subsystem
+	 * access gate: power_on sets the AON-APB access bit (REG 0x14C BIT(5),
+	 * via sprd,syscon-aon-apb) and fires a non-blocking mailbox wakeup on
+	 * channel 5 - it does NOT require DSP firmware. Audio consumers (VBC /
+	 * sc2730 codec) take power-domains = <&agdsp> so that the AGCP-AHB and
+	 * VBC registers become AP-accessible. Reset lines are omitted (the
+	 * mainline driver declares them but never requests them).
+	 * (memory: audio-bringup; docs/AUDIO-THEORY)
+	 *
+	 * memory-region (agdsp_smem_reserved / audiodsp_reserved / audio_dma_region
+	 * below) is a board-specific reserved-memory carveout, not a generic
+	 * ums512 property (mirrors the &gpu / mali-supply split) - boards that
+	 * want audio must supply those regions and set memory-region via an
+	 * override, e.g.:
+	 *   &agdsp { memory-region = <&agdsp_smem_reserved>; };
+	 */
+	agdsp: audio-dsp {
+		compatible = "sprd,ums512-agdsp";
+		sprd,syscon-aon-apb = <&aon_apb_regs>;
+		mboxes = <&mailbox 5>;
+		#power-domain-cells = <0>;
+	};
+
+	/*
+	 * Audio-DSP (AUDCP) firmware boot. Loads l_agdsp (request_firmware
+	 * "sprd/ums512-agdsp.bin") into a board-supplied reserved region, then
+	 * releases the DSP from reset at boot-vector (load+0x80)>>1. Control
+	 * bits are <&syscon reg mask> tuples transcribed from the stock
+	 * "audiocp_boot" node (pmu-apb power/reset, aon-apb boot vector).
+	 * memory-region (board override): [0] firmware load, [1] IPC ring.
+	 */
+	audcp_boot: audcp-boot {
+		compatible = "sprd,ums512-audcp-boot";
+		/*
+		 * Power the AGCP/AGDSP domain before reset-release (genpd
+		 * power_on sets the AON access bit + mailbox wakeup so the PMU
+		 * powers the audio subsystem). The audcp* gate clocks are NOT
+		 * wired here on purpose: they live inside this domain and the
+		 * ums512-clk driver warns that touching them before the domain
+		 * is up faults - the DSP firmware enables them itself post-boot.
+		 */
+		power-domains = <&agdsp>;
+		sysshutdown = <&pmu_apb_regs 0x60 0x2000000>;
+		coreshutdown = <&pmu_apb_regs 0x5c 0x1000000>;
+		deepsleep = <&pmu_apb_regs 0xcc 0x80000>;
+		corereset = <&pmu_apb_regs 0xb0 0x400>;
+		sysreset = <&pmu_apb_regs 0xb0 0x200>;
+		reset_sel = <&pmu_apb_regs 0x7a4 0xff>;
+		bootprotect = <&aon_apb_regs 0x78 0xffff>;
+		bootvector = <&aon_apb_regs 0x140 0xffffffff>;
+		bootaddress_sel = <&aon_apb_regs 0x144 0x01>;
+		/* Optional status read-back (post-boot diagnostic). */
+		sysstatus = <&pmu_apb_regs 0xb8 0xff000000>;
+		corestatus = <&pmu_apb_regs 0x10c 0xff>;
+		sleepstatus = <&pmu_apb_regs 0xd4 0xf000>;
+	};
+
+	/*
+	 * VBC (IPC-only front to the audio DSP) + PCM DMA platform. The VBC
+	 * node carries no MMIO - vbc-v4-dsp talks to the DSP over the agdsp
+	 * mailbox; sprd_pcm drives DDR<->VBC-FIFO DMA via the AGCP DMA engine.
+	 * memory-region is a board override (see agdsp comment above).
+	 */
+	vbc: vbc {
+		compatible = "sprd,ums512-vbc";
+		sprd,dsp = <&agdsp>;
+	};
+
+	sprd_pcm: audio-platform {
+		compatible = "sprd,pcm-platform";
+		dmas = <&agcp_dma 12>, <&agcp_dma 9>, <&agcp_dma 14>;
+		dma-names = "voice_c", "fast_p", "dspcap_c";
+	};
+
 	soc: soc {
 		compatible = "simple-bus";
 		#address-cells = <2>;
@@ -822,6 +897,32 @@
 			};
 		};
 
+		/*
+		 * AON mailbox (inbox/outbox FIFOs to the CP/AGDSP sidecores).
+		 * ums512/sharkl5pro is the mainline R1 register layout (offsets
+		 * verified identical to sc9860; downstream sharkl5Pro_defconfig
+		 * sets CONFIG_UNISOC_MAILBOX_R1), so it binds via the sc9860
+		 * fallback. Needed by the audio AGDSP power-domain (VBC access).
+		 *
+		 * Only inbox+outbox are wired: the driver rejects a "supp-outbox"
+		 * IRQ unless the matched info has a non-zero supp_id (sc9860's is
+		 * 0), and the supplementary/out-of-band outbox isn't needed for
+		 * AGDSP wakeup messaging. The HW's third IRQ (GIC_SPI 84) is left
+		 * unused; wire a dedicated ums512 supp_id later if oob is needed.
+		 */
+		mailbox: mailbox@320a0000 {
+			compatible = "sprd,ums512-mailbox", "sprd,sc9860-mailbox";
+			reg = <0 0x320a0000 0 0x8000>,
+			      <0 0x320a8000 0 0x8000>;
+			reg-names = "inbox", "outbox";
+			#mbox-cells = <1>;
+			clocks = <&aonapb_gate CLK_MBOX_EB>;
+			clock-names = "enable";
+			interrupts = <GIC_SPI 82 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 83 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "inbox", "outbox";
+		};
+
 		pmu_apb_regs: syscon@327e0000 {
 			compatible = "sprd,ums512-glbregs", "syscon",
 				     "simple-mfd";
@@ -891,6 +992,53 @@
 				reg = <0x0 0x300>;
 				#clock-cells = <1>;
 			};
+		};
+
+		/*
+		 * AGCP audio peripherals (inside the AGDSP power domain). The DSP
+		 * shares the VBC with the AP; the AP uses MCDT for FIFO transfer
+		 * and the AGCP DMA engine for DDR<->FIFO. Addresses/IRQs from the
+		 * stock agcp node; MCDT is the r1p0 layout (sc9860/R1).
+		 */
+		mcdt@33490000 {
+			compatible = "sprd,ums512-mcdt";
+			reg = <0 0x33490000 0 0x170>;
+			interrupts = <GIC_SPI 182 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&audcpahb_gate CLK_AUDCP_MCDT_EB>;
+			power-domains = <&agdsp>;
+		};
+
+		agcp_dma: dma-controller@33580000 {
+			compatible = "sprd,ums512-dma", "sprd,sc9860-dma";
+			reg = <0 0x33580000 0 0x4000>;
+			interrupts = <GIC_SPI 180 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&audcpahb_gate CLK_AUDCP_DMA_AP_EB>,
+				 <&audcpahb_gate CLK_AUDCP_DMA_AP_ASHB_EB>;
+			clock-names = "enable", "ashb_eb";
+			power-domains = <&agdsp>;
+			#dma-cells = <1>;
+			dma-channels = <32>;
+		};
+
+		dig_codec: audio-codec@33750000 {
+			compatible = "sprd,ums512-digital-codec";
+			reg = <0 0x33750000 0 0x1000>;
+			/*
+			 * AUD_EB gates the codec block itself. The VBC IIS0
+			 * output path also needs its interface gates enabled
+			 * for the 48 kHz BCLK/LRCLK to run - the stock AGDSP
+			 * firmware brings up the VBC core (vbc-eb) but not the
+			 * IIS0 interface (iis0/vbcifd), the SRC, or the 24 MHz
+			 * reference. Without them the DSP free-runs into an
+			 * unclocked IIS0 and the DAC only emits noise.
+			 */
+			clocks = <&audcpahb_gate CLK_AUDCP_AUD_EB>,
+				 <&audcpahb_gate CLK_AUDCP_IIS0_EB>,
+				 <&audcpahb_gate CLK_AUDCP_VBCIFD_EB>,
+				 <&audcpahb_gate CLK_AUDCP_SRC48K_EB>,
+				 <&audcpahb_gate CLK_AUDCP_VBC_24M_EB>;
+			power-domains = <&agdsp>;
+			#sound-dai-cells = <1>;
 		};
 
 		gpu_apb_regs: syscon@60100000 {

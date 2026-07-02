@@ -74,6 +74,37 @@
 			reusable;
 			linux,cma-default;
 		};
+
+		/*
+		 * Audio DDR (umbrella stock "audio-mem@87400000", 0x400000),
+		 * split into the three sub-regions the mainline audio stack
+		 * references, matching the stock audio-mem-mgr fixed offsets:
+		 *  - 0x87400000 +0x300000  PCM DMA pool (stock ddr32-dma)
+		 *  - 0x87700000 +0x080000  DSP mem-dump scratch (kept reserved)
+		 *  - 0x87780000 +0x080000  cmd/smsg IPC ring + DSP shared bufs
+		 * Same total footprint as the umbrella region.
+		 * (memory: audio-bringup; docs/AUDIO-THEORY)
+		 */
+		audio_dma_region: audio-dma@87400000 {
+			compatible = "shared-dma-pool";
+			reg = <0x0 0x87400000 0x0 0x00300000>;
+			no-map;
+		};
+
+		audio_dspdump_reserved: audio-dspdump@87700000 {
+			reg = <0x0 0x87700000 0x0 0x00080000>;
+			no-map;
+		};
+
+		agdsp_smem_reserved: audio-smem@87780000 {
+			reg = <0x0 0x87780000 0x0 0x00080000>;
+			no-map;
+		};
+
+		audiodsp_reserved: audiodsp-mem@89000000 {
+			reg = <0x0 0x89000000 0x0 0x00600000>;
+			no-map;
+		};
 	};
 
 	backlight: backlight {
@@ -531,6 +562,88 @@
 };
 
 /*
+ * Audio external speaker power-amplifier. Stock wires two Awinic smart PAs
+ * (compatible "awinic,aw87xxx_pa") on i2c2 (i2c@500000): dev_index 0 @ 0x58 and
+ * dev_index 1 @ 0x59 (stock dtbo_overlay_1.dts fragment@4). i2c2 uses dedicated
+ * SCL2/SDA2 pads (no pinmux remux needed, unlike i2c4 on the SIM pads), so the
+ * bus only needs status = "okay".
+ *
+ * This SKU has a single speaker, and an on-device i2c-2 scan confirms only
+ * 0x58 ACKs (0x59 NAKs), so only dev_index 0 is populated. The part is an
+ * AW87391 (ID reg 0x00 reads 0xc1). Driven purely over i2c (no enable-gpios)
+ * by the in-tree aw87390.c "anbernic,rgds-amp" match_data variant, which
+ * carries the exact undocumented register sequence this handheld's amp
+ * needs (upstream added this compatible specifically for Anbernic RG-DS
+ * class devices). (memory: audio-bringup)
+ */
+&i2c2 {
+	status = "okay";
+	clock-frequency = <400000>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	speaker_amp: audio-codec@58 {
+		compatible = "anbernic,rgds-amp";
+		reg = <0x58>;
+		sound-name-prefix = "Speaker Amp";
+	};
+};
+
+/* In-PMIC analog codec (sc2730). The external speaker PA taps its HP out. */
+&sc2730_codec {
+	status = "okay";
+};
+
+/* Board reserved-memory carveouts for the audio nodes (see comment on &agdsp
+ * in ums512.dtsi for why these live here rather than in the shared dtsi). */
+&agdsp {
+	memory-region = <&agdsp_smem_reserved>;
+};
+
+&audcp_boot {
+	memory-region = <&audiodsp_reserved>, <&agdsp_smem_reserved>;
+};
+
+&vbc {
+	memory-region = <&audio_dma_region>;
+};
+
+&sprd_pcm {
+	memory-region = <&audio_dma_region>;
+};
+
+/ {
+	sound {
+		compatible = "sprd,ums512-audio-card";
+		model = "rg-rotate";
+		sprd,pcm-platform = <&sprd_pcm>;
+		memory-region = <&audio_dma_region>;
+		widgets =
+			"Headphone", "Headphones",
+			"Speaker", "Speaker";
+		pin-switches = "Speaker";
+		audio-routing =
+			"Headphones", "HPL_OUT",
+			"Headphones", "HPR_OUT",
+			"Speaker Amp IN", "HPL_OUT",
+			"Speaker", "Speaker Amp OUT";
+		aux-devs = <&speaker_amp>;
+
+		/* Playback backend: VBC IIS0 -> AGCP digital + sc2730 analog. */
+		iis0-dai-link {
+			link-name = "IIS0";
+			dai-format = "i2s";
+			frame-inversion;
+			sprd,fixed-fmt = <24>;
+
+			codec {
+				sound-dai = <&dig_codec 0>, <&sc2730_codec 0>;
+			};
+		};
+	};
+};
+
+/*
  * ===========================================================================
  * STAGED — blocked on SoC nodes not yet present in upstream 7.1 ums512.dtsi.
  * Port each SoC node into the 7.1 dtsi, then un-stage the matching board
@@ -582,8 +695,23 @@
  *       capacity props, topdvfs_controller (dcdc_cpu0/1/mm/modem cells) +
  *       cpudvfs_dev@322a8000 ported into ums512.dtsi. (memory: thermal-cpufreq-bringup)
  *
- * [ ] Audio  (memory: audio-bringup; docs/AUDIO-THEORY)
- *       needs codec/VBC/pcm SoC graph. board: i2c2 speaker_amp aw87391@58
- *       (en-gpio 9), &sc2730_codec okay, sound card "sprd,ums512-audio-card"
- *       (IIS0 link, dig_codec+sc2730_codec). Do NOT re-add AUDIF soft-reset.
+ * [x] Audio  — DT/driver plumbing DONE (board &i2c2/&sc2730_codec/sound un-staged
+ *       above); the underlying DAC-not-clocked bug from 6.16 is NOT yet fixed on
+ *       real hardware. Ported: agdsp/audcp_boot/vbc/sprd_pcm top-level nodes +
+ *       mailbox/mcdt/agcp_dma/dig_codec SoC nodes into ums512.dtsi; audio DDR
+ *       reserved-memory split into board reserved-memory; sprd-audcp-boot.c
+ *       driver (was entirely missing upstream) + Kconfig/Makefile; vbc-v4-dsp.c/.h
+ *       and ums9230-digital.c carried wholesale from 6.16 (SDM init, mux_dac_out
+ *       kcontrol, IIS-master kcontrols, clk_bulk + pm_runtime supply-event fix);
+ *       sprd-mcdt.c carried wholesale (clk/pm_runtime + the r1p0 "ums512-mcdt"
+ *       compat entry upstream's leaner file doesn't have). sc2730.c and
+ *       sprd-pcm-dma.c needed NO changes — do NOT re-add the AUDIF soft-reset
+ *       (upstream tried and dropped it independently; confirmed dead end).
+ *       CORRECTION: the speaker amp is NOT the old aw87391 shim — upstream's
+ *       aw87390.c gained a dedicated "anbernic,rgds-amp" match_data variant
+ *       with the exact undocumented register sequence this handheld needs
+ *       (pure i2c, no enable-gpios). Dropped the ported shim, used that instead.
+ *       NEXT: flash + re-run the mux_dac_out / IIS-master experiments from
+ *       audio-bringup session 5 on this kernel. (memory: audio-bringup,
+ *       rebase-7-1-survey; docs/AUDIO-THEORY)
  */

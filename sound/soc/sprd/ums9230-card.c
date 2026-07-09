@@ -18,11 +18,6 @@ SND_SOC_DAILINK_DEFS(fe_capture_dsp,
 	DAILINK_COMP_ARRAY(COMP_DUMMY()),
 	DAILINK_COMP_ARRAY(COMP_EMPTY()));
 
-SND_SOC_DAILINK_DEFS(fe_voice,
-	DAILINK_COMP_ARRAY(COMP_CPU("VBC_FE_VOICE")),
-	DAILINK_COMP_ARRAY(COMP_DUMMY()),
-	DAILINK_COMP_ARRAY(COMP_EMPTY()));
-
 SND_SOC_DAILINK_DEFS(voice_hostless,
 	DAILINK_COMP_ARRAY(COMP_CPU("VBC_FE_VOICE")),
 	DAILINK_COMP_ARRAY(COMP_DUMMY()),
@@ -80,14 +75,6 @@ static struct snd_soc_dai_link ums9230_card_dai_links[] = {
 		.dynamic = 1,
 		.capture_only = 1,
 		SND_SOC_DAILINK_REG(fe_capture_dsp),
-	},
-	{
-		.name = "FE_VOICE",
-		.stream_name = "FE_VOICE",
-		.trigger = {SND_SOC_DPCM_TRIGGER_PRE,
-			    SND_SOC_DPCM_TRIGGER_PRE},
-		.dynamic = 1,
-		SND_SOC_DAILINK_REG(fe_voice),
 	},
 
 	/* Modem voice channels */
@@ -164,8 +151,6 @@ static int ums9230_card_probe(struct platform_device *pdev)
 
 static const struct of_device_id ums9230_card_of_match[] = {
 	{ .compatible = "sprd,ums9230-audio-card" },
-	/* Generic card (DAI links are SoC-agnostic VBC FE/IIS names). */
-	{ .compatible = "sprd,ums512-audio-card" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, ums9230_card_of_match);

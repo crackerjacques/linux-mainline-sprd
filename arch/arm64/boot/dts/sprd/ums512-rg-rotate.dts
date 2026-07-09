@@ -1,22 +1,6 @@
 // SPDX-License-Identifier: (GPL-2.0 OR MIT)
 /*
  * Anbernic RG Rotate (Unisoc UMS512 / T618, sharkl5pro) board DTS.
- *
- * 7.1 rebase of the 6.16 ums512 bring-up (see docs/REBASE-7.1-SURVEY.md).
- * The RG Rotate is a ums512_1h10 variant; this board file layers the
- * device-specific deltas on top of upstream's generic ums512.dtsi.
- *
- * NOTE ON SCOPE (7.1 rebase, stage 1):
- * Upstream's ums512.dtsi is far leaner than our 6.16 tree's. It currently
- * provides only: uart0/1, sdio0/sdio3, gpu clk syscon, ap_clk/apapb_gate,
- * ap_ahb_regs. It does NOT yet carry SoC nodes for: ap_gpio, pinctrl, pwm,
- * dpu/dsi/disp/iommu_disp (display), hsphy/usb, i2c2/i2c4, the audio
- * codec/VBC/pcm graph, or the cpufreq-dvfs supplies. So this board file
- * wires only what upstream's dtsi can back today (serial, SD, eMMC, the
- * SC2730 fuel gauge). The remaining subsystems are staged below as an
- * inline roadmap and land as their SoC nodes are ported into the 7.1 dtsi,
- * one independently-bootable subsystem at a time. Cross-ref the memories /
- * docs cited per block.
  */
 
 /dts-v1/;
@@ -74,37 +58,6 @@
 			reusable;
 			linux,cma-default;
 		};
-
-		/*
-		 * Audio DDR (umbrella stock "audio-mem@87400000", 0x400000),
-		 * split into the three sub-regions the mainline audio stack
-		 * references, matching the stock audio-mem-mgr fixed offsets:
-		 *  - 0x87400000 +0x300000  PCM DMA pool (stock ddr32-dma)
-		 *  - 0x87700000 +0x080000  DSP mem-dump scratch (kept reserved)
-		 *  - 0x87780000 +0x080000  cmd/smsg IPC ring + DSP shared bufs
-		 * Same total footprint as the umbrella region.
-		 * (memory: audio-bringup; docs/AUDIO-THEORY)
-		 */
-		audio_dma_region: audio-dma@87400000 {
-			compatible = "shared-dma-pool";
-			reg = <0x0 0x87400000 0x0 0x00300000>;
-			no-map;
-		};
-
-		audio_dspdump_reserved: audio-dspdump@87700000 {
-			reg = <0x0 0x87700000 0x0 0x00080000>;
-			no-map;
-		};
-
-		agdsp_smem_reserved: audio-smem@87780000 {
-			reg = <0x0 0x87780000 0x0 0x00080000>;
-			no-map;
-		};
-
-		audiodsp_reserved: audiodsp-mem@89000000 {
-			reg = <0x0 0x89000000 0x0 0x00600000>;
-			no-map;
-		};
 	};
 
 	backlight: backlight {
@@ -130,12 +83,6 @@
 		regulator-boot-on;
 	};
 
-	/*
-	 * Battery profile for the RG Rotate cell. Values transcribed from the
-	 * stock dtbo overlay (device/stock/dtbo_decompiled/dtbo_overlay_1.dts,
-	 * the authoritative source for this SKU). Consumed by the SC2730 fuel
-	 * gauge (sc2730_fgu) via monitored-battery.
-	 */
 	bat: battery {
 		compatible = "simple-battery";
 		charge-full-design-microamp-hours = <1900000>;
@@ -154,14 +101,6 @@
 			<3412000 0>;
 	};
 
-	/*
-	 * CPU register-level DVFS supply config (real ums512-1h10 silicon
-	 * values from vendor/linux-kernel-4-14-sprd). CPU0 (little) drives its
-	 * DCDC via the SoC top-dvfs ADI path; CPU1 (big) drives the third PMIC
-	 * via the SoC top-dvfs hardware i2c master (chnl-in-i2c = 1) — no Linux
-	 * i2c regulator needed, matching the stock DTB (aon_i2c0 left disabled).
-	 * (memory: thermal-cpufreq-bringup)
-	 */
 	dvfs_dcdc_cpu0_supply: dvfs-dcdc-cpu0-supply {
 		pmic-type-num = <0>;
 		slew-rate = <9375>; /* 9375uV/us */
@@ -225,29 +164,6 @@
 	};
 };
 
-/* Console + secondary UART. serial1 is the console per /chosen. */
-&uart0 {
-	status = "okay";
-};
-
-&uart1 {
-	status = "okay";
-};
-
-/*
- * microSD. Claim the SD core/IO supplies so the regulator framework keeps
- * them powered without regulator_ignore_unused. Mainline sdhci-sprd sets
- * SDHCI_QUIRK_BROKEN_CARD_DETECTION and ignores the stock syscon card
- * detect; there is no dedicated CD GPIO on this board. `broken-cd` alone
- * (mmc-core polling via MMC_CAP_NEEDS_POLL) caused a periodic "Got command
- * interrupt ... even though no command operation was in progress" pr_err +
- * register dump every poll cycle - confirmed on-device to be the detect
- * poll's status command racing a stray/duplicate command-complete IRQ on
- * the SPRD controller. `non-removable` skips the periodic poll entirely
- * (one-shot enumeration at boot), which eliminates the spurious IRQ.
- * Trade-off: no hot-swap detection without a reboot. (memory:
- * sdcard-sdio0-bringup)
- */
 &sdio0 {
 	status = "okay";
 	vmmc-supply = <&vddsdcore>;
@@ -283,14 +199,6 @@
 	sprd,calib-resistance-micro-ohms = <10000>;
 };
 
-/*
- * i2c4 SCL/SDA are routed onto the SIMCLK2 / SIMDA2 pads at AF1 with internal
- * pull-ups (source: vendor u-boot ums512_1h10 pinmap). UMS512 has no dedicated
- * SCL4/SDA4 pads and the stock pinmux lived in the neutralized dtbo, so it must
- * be set here or the bus never toggles. NB: sprd DT function naming is
- * 1-indexed vs the AF number (sprd_pmx_set_mux maps "func2" -> AF1), so I2C4 =
- * "func2". (memory: charger-aw32257-i2c4-blocker)
- */
 &pinctrl {
 	i2c4_pin_func: i2c4-pin-func {
 		pins = "UMS512_SIMCLK2", "UMS512_SIMDA2";
@@ -307,8 +215,8 @@
 
 /*
  * Battery charger. Stock uses an AW32257 (Awinic) at i2c4 0x6a, a register
- * clone of the TI bq24157/bq24158 — drive it with the mainline bq2415x driver.
- * Values from the stock dtbo overlay (charger@6a), converted to bq2415x units.
+ * clone of the TI bq24157/bq24158. Values have been translated from the
+ * stock dtbo overlay (charger@6a) to bq2415x units.
  */
 &i2c4 {
 	status = "okay";
@@ -330,8 +238,6 @@
 	};
 };
 
-/* Display pipeline. Panel free-runs (see sprd_dpu.c/sprd_dsi.c free-run hack +
- * docs/DISPLAY-BRINGUP.md). (memory: cold-init-prepare-prev-first) */
 &iommu_disp {
 	status = "okay";
 };
@@ -530,33 +436,16 @@
 	phy-supply = <&vddusb33>;
 };
 
-/*
- * USB. dr_mode MUST stay "otg": the sprd musb glue only registers the
- * usb_role_switch (/sys/class/usb_role/*) in OTG mode, and this board has no
- * extcon/VBUS session edge -- the PHY force-asserts VBUS. The gadget session +
- * D+ pullup are asserted via sprd_otg_switch_set(DEVICE) (drivers/usb/musb/
- * sprd.c board hack), which the initramfs init triggers by writing "device" to
- * the role sysfs. dr_mode="peripheral" drops the role switch -> the init dance
- * no-ops and the gadget never enumerates (host sees -71).
- * (memory: usb-gadget-otg-and-cleanup)
- */
 &usb {
 	status = "okay";
 	dr_mode = "otg";
 };
 
-/* Mali-G52 MP2 (Bifrost) via mainline panfrost. SoC gpu@60000000 + gpu_opp_table
- * + pmu power-controller + gpu_clk reset ported into ums512.dtsi.
- * (memory: gpu-panfrost-bringup) */
 &gpu {
 	mali-supply = <&vddgpu>;
 	status = "okay";
 };
 
-/* Register-level CPU DVFS (sprd-cpufreqhw / hwdvfs — the SMCCC sprd-cpufreq-v2
- * path is a dead end: stock firmware returns NOT_SUPPORTED for SPRD_SIP_SVC_DVFS_*).
- * policy0 = cpu0-5 (A55), policy6 = cpu6-7 (A75). dcdc_cpu0/1 cells + cpudvfs_dev
- * ported into ums512.dtsi. (memory: thermal-cpufreq-bringup) */
 &dcdc_cpu0 {
 	dcdc-supply-mode-cfg = <&dvfs_dcdc_cpu0_supply>;
 };
@@ -569,21 +458,6 @@
 	status = "okay";
 };
 
-/*
- * Audio external speaker power-amplifier. Stock wires two Awinic smart PAs
- * (compatible "awinic,aw87xxx_pa") on i2c2 (i2c@500000): dev_index 0 @ 0x58 and
- * dev_index 1 @ 0x59 (stock dtbo_overlay_1.dts fragment@4). i2c2 uses dedicated
- * SCL2/SDA2 pads (no pinmux remux needed, unlike i2c4 on the SIM pads), so the
- * bus only needs status = "okay".
- *
- * This SKU has a single speaker, and an on-device i2c-2 scan confirms only
- * 0x58 ACKs (0x59 NAKs), so only dev_index 0 is populated. The part is an
- * AW87391 (ID reg 0x00 reads 0xc1). Driven purely over i2c (no enable-gpios)
- * by the in-tree aw87390.c "anbernic,rgds-amp" match_data variant, which
- * carries the exact undocumented register sequence this handheld's amp
- * needs (upstream added this compatible specifically for Anbernic RG-DS
- * class devices). (memory: audio-bringup)
- */
 &i2c2 {
 	status = "okay";
 	clock-frequency = <400000>;
@@ -591,135 +465,10 @@
 	#size-cells = <0>;
 
 	speaker_amp: audio-codec@58 {
+		/* Anbernic reused a previously mainlined awinic 87xxx amp */
 		compatible = "anbernic,rgds-amp";
 		reg = <0x58>;
 		sound-name-prefix = "Speaker Amp";
 	};
 };
 
-/* In-PMIC analog codec (sc2730). The external speaker PA taps its HP out. */
-&sc2730_codec {
-	status = "okay";
-};
-
-/* Board reserved-memory carveouts for the audio nodes (see comment on &agdsp
- * in ums512.dtsi for why these live here rather than in the shared dtsi). */
-&agdsp {
-	memory-region = <&agdsp_smem_reserved>;
-};
-
-&audcp_boot {
-	memory-region = <&audiodsp_reserved>, <&agdsp_smem_reserved>;
-};
-
-&vbc {
-	memory-region = <&audio_dma_region>;
-};
-
-&sprd_pcm {
-	memory-region = <&audio_dma_region>;
-};
-
-/ {
-	sound {
-		compatible = "sprd,ums512-audio-card";
-		model = "rg-rotate";
-		sprd,pcm-platform = <&sprd_pcm>;
-		memory-region = <&audio_dma_region>;
-		widgets =
-			"Headphone", "Headphones",
-			"Speaker", "Speaker";
-		pin-switches = "Speaker";
-		audio-routing =
-			"Headphones", "HPL_OUT",
-			"Headphones", "HPR_OUT",
-			"Speaker Amp IN", "HPL_OUT",
-			"Speaker", "Speaker Amp OUT";
-		aux-devs = <&speaker_amp>;
-
-		/* Playback backend: VBC IIS0 -> AGCP digital + sc2730 analog. */
-		iis0-dai-link {
-			link-name = "IIS0";
-			dai-format = "i2s";
-			frame-inversion;
-			sprd,fixed-fmt = <24>;
-
-			codec {
-				sound-dai = <&dig_codec 0>, <&sc2730_codec 0>;
-			};
-		};
-	};
-};
-
-/*
- * ===========================================================================
- * STAGED — blocked on SoC nodes not yet present in upstream 7.1 ums512.dtsi.
- * Port each SoC node into the 7.1 dtsi, then un-stage the matching board
- * block here. Order mirrors docs/REBASE-7.1-SURVEY.md (lowest risk first).
- * ===========================================================================
- *
- * [x] ap_gpio + pinctrl  — DONE. Ported ap_gpio@70000 + pinctrl@450000 SoC
- *       nodes into ums512.dtsi (offset-addr under aon bus@32000000) and the
- *       pinctrl-sprd-ums512.c driver (drops in clean; framework identical to
- *       6.16). Configs: PINCTRL_SPRD_UMS512, GPIO_SPRD, GPIO_EIC_SPRD.
- *       (ums9230 pinctrl data does NOT cover ums512 pins — own driver kept.)
- *
- * [x] i2c + charger  — DONE. Ported i2c0..i2c4 controllers into ums512.dtsi
- *       apb@70000000 (offset addrs; upstream's apb bus ALREADY uses the
- *       offset-range scheme our 6.16 fix had to add, so i2c4 lands at
- *       0x00700000 for free). i2c4 pinmux + charger@6a un-staged above.
- *       (memory: charger-aw32257-i2c4-blocker)
- *
- * [x] USB  — DONE. Ported hsphy (anlg_phy_g2) + usb@5fff0000 (under soc) SoC
- *       nodes into ums512.dtsi, and re-applied the board musb DEVICE-case hack
- *       in drivers/usb/musb/sprd.c (upstream only added OTG_STATE_B_IDLE; it
- *       still does not assert a gadget session on this VBUS-edge-less board).
- *       Board &hsphy/&usb un-staged above. (memory: usb-gadget-otg-and-cleanup)
- *
- * [x] Display  — DONE (fbcon confirmed visible on panel). DT: dpu/iommu_disp/dsi
- *       (mm bus), disp, pwm, dphy clocks + board framebuffer/backlight/lcd-regs/
- *       panel. Drivers: the proven 6.16 sprd_dpu/dsi/megacores_pll carried
- *       wholesale (compile clean against 7.1 DRM) — free-run, cold-init reset +
- *       clock prep, prepare_prev_first. (memory: cold-init-prepare-prev-first;
- *       docs/DISPLAY-BRINGUP, DISPLAY-KNOWN-GOOD-DSI-STATE)
- *
- * [x] GPU panfrost  — DONE (board &gpu un-staged above). DT: gpu@60000000 +
- *       gpu_opp_table + pmu power-controller (GPU_TOP/MM/PUBCP) + gpu_clk
- *       #reset-cells ported into ums512.dtsi; sprd,ums512-power.h +
- *       ums512-pm-domains.h + pm-domains.c match restored. Drivers: ums512-clk.c
- *       gained the reset map + reset-controller registration (the reorg's
- *       ums9230 probe is the model — reset->regmap = data->regmap, so our 6.16
- *       drvdata PC=0x0 bug does NOT exist upstream). panfrost_drv.c: sprd,ums512-mali
- *       match → upstream default_pm_rt_data (== our old unisoc_ums512_data).
- *       (memory: gpu-panfrost-bringup)
- *
- * [x] cpufreq DVFS  — DONE (board &dcdc_cpu0/1 + &cpudvfs_dev un-staged above).
- *       CORRECTION to the survey: upstream sprd-cpufreq-v2 is a DEAD END here
- *       (stock firmware returns NOT_SUPPORTED for every SPRD_SIP_SVC_DVFS_*), so
- *       we ported the register-level engine (sprd-cpufreqhw + hwdvfs-normal +
- *       archdata + common + sysfs-normal, ARM_SPRD_CPUFREQ_HW) — compiles clean
- *       against the 7.1 cpufreq core, carries the topology_cluster_id fix. DT:
- *       cpufreq_clus0/1 + scu/periph/gic OPP-data, per-CPU cpufreq-data-v1 +
- *       capacity props, topdvfs_controller (dcdc_cpu0/1/mm/modem cells) +
- *       cpudvfs_dev@322a8000 ported into ums512.dtsi. (memory: thermal-cpufreq-bringup)
- *
- * [x] Audio  — DT/driver plumbing DONE (board &i2c2/&sc2730_codec/sound un-staged
- *       above); the underlying DAC-not-clocked bug from 6.16 is NOT yet fixed on
- *       real hardware. Ported: agdsp/audcp_boot/vbc/sprd_pcm top-level nodes +
- *       mailbox/mcdt/agcp_dma/dig_codec SoC nodes into ums512.dtsi; audio DDR
- *       reserved-memory split into board reserved-memory; sprd-audcp-boot.c
- *       driver (was entirely missing upstream) + Kconfig/Makefile; vbc-v4-dsp.c/.h
- *       and ums9230-digital.c carried wholesale from 6.16 (SDM init, mux_dac_out
- *       kcontrol, IIS-master kcontrols, clk_bulk + pm_runtime supply-event fix);
- *       sprd-mcdt.c carried wholesale (clk/pm_runtime + the r1p0 "ums512-mcdt"
- *       compat entry upstream's leaner file doesn't have). sc2730.c and
- *       sprd-pcm-dma.c needed NO changes — do NOT re-add the AUDIF soft-reset
- *       (upstream tried and dropped it independently; confirmed dead end).
- *       CORRECTION: the speaker amp is NOT the old aw87391 shim — upstream's
- *       aw87390.c gained a dedicated "anbernic,rgds-amp" match_data variant
- *       with the exact undocumented register sequence this handheld needs
- *       (pure i2c, no enable-gpios). Dropped the ported shim, used that instead.
- *       NEXT: flash + re-run the mux_dac_out / IIS-master experiments from
- *       audio-bringup session 5 on this kernel. (memory: audio-bringup,
- *       rebase-7-1-survey; docs/AUDIO-THEORY)
- */

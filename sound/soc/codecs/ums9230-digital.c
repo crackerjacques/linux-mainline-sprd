@@ -30,42 +30,13 @@
 
 struct ums9230_aud_priv {
 	struct regmap *regmap;
-	struct clk_bulk_data *clks;
-	int num_clks;
+	struct clk *clk;
 };
 
 static const struct snd_kcontrol_new ums9230_aud_controls[] = {
 	SOC_SINGLE("Swap ADC Channels", AUD_I2S_CTL, 2, 1, 0),
 	SOC_SINGLE("Swap DAC Channels", AUD_I2S_CTL, 1, 1, 0),
 };
-
-/*
- * The AUD_TOP_CTL DAC/ADC enable bits below are written by DAPM through the
- * regmap. The regmap goes cache_only with the clock gated once runtime PM
- * autosuspends (3s after probe), so a write issued while suspended would only
- * land in the regcache and never reach silicon - leaving the codec dead.
- * Pin the device resumed across each supply transition (PRE_PMU runs before
- * the core writes the enable bit, POST_PMD after it clears it) so the bit
- * always hits hardware with the clock on.
- */
-static int ums9230_aud_supply_event(struct snd_soc_dapm_widget *w,
-				    struct snd_kcontrol *kcontrol, int event)
-{
-	struct snd_soc_component *component =
-		snd_soc_dapm_to_component(w->dapm);
-
-	switch (event) {
-	case SND_SOC_DAPM_PRE_PMU:
-		pm_runtime_get_sync(component->dev);
-		break;
-	case SND_SOC_DAPM_POST_PMD:
-		pm_runtime_mark_last_busy(component->dev);
-		pm_runtime_put_autosuspend(component->dev);
-		break;
-	}
-
-	return 0;
-}
 
 static const struct snd_soc_dapm_widget ums9230_aud_dapm_widgets[] = {
 	SND_SOC_DAPM_AIF_IN("I2S RX", NULL, 0, SND_SOC_NOPM, 0, 0),
@@ -75,17 +46,13 @@ static const struct snd_soc_dapm_widget ums9230_aud_dapm_widgets[] = {
 	SND_SOC_DAPM_INPUT("AUDIF_RX"),
 
 	SND_SOC_DAPM_SUPPLY("Digital DACL Switch", AUD_TOP_CTL, 0, 0,
-			    ums9230_aud_supply_event,
-			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+			    NULL, 0),
 	SND_SOC_DAPM_SUPPLY("Digital DACR Switch", AUD_TOP_CTL, 2, 0,
-			    ums9230_aud_supply_event,
-			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+			    NULL, 0),
 	SND_SOC_DAPM_SUPPLY("Digital ADCL Switch", AUD_TOP_CTL, 1, 0,
-			    ums9230_aud_supply_event,
-			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+			    NULL, 0),
 	SND_SOC_DAPM_SUPPLY("Digital ADCR Switch", AUD_TOP_CTL, 3, 0,
-			    ums9230_aud_supply_event,
-			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+			    NULL, 0),
 };
 
 static const struct snd_soc_dapm_route ums9230_aud_dapm_routes[] = {
@@ -162,14 +129,6 @@ static int ums9230_digital_hw_params(struct snd_pcm_substream *substream,
 				     struct snd_soc_dai *dai)
 {
 	int fs_mode;
-	int ret = 0;
-
-	/*
-	 * Keep the codec resumed (clock on, regmap not cache_only) while we
-	 * program the sample-rate field, otherwise the write only updates the
-	 * regcache and the DAC/ADC keeps running at the reset-default rate.
-	 */
-	pm_runtime_get_sync(dai->dev);
 
 	switch (substream->stream) {
 	case SNDRV_PCM_STREAM_PLAYBACK:
@@ -177,48 +136,28 @@ static int ums9230_digital_hw_params(struct snd_pcm_substream *substream,
 		if (fs_mode < 0) {
 			dev_err(dai->dev, "invalid playback rate %d\n",
 				params_rate(params));
-			ret = fs_mode;
-			break;
+			return fs_mode;
 		}
 
 		snd_soc_component_update_bits(dai->component, AUD_DAC_CTL,
 					      0xf, fs_mode);
-
-		/*
-		 * Sigma-delta modulator init. The vendor sprd_codec_digital_open()
-		 * programs the SDM DC-offset seed (AUD_DAC_SDM_L/H = 0x19999) and
-		 * clears AUD_SDM_CTL0 on every playback open; mainline never did,
-		 * leaving the SDM at reset (DC seed 0) so the DAC emits noise
-		 * instead of the tone. This is the non-ramp (no HPL/EAR mix) value.
-		 */
-		snd_soc_component_update_bits(dai->component, AUD_DAC_SDM_L,
-					      0xffff, 0x9999);
-		snd_soc_component_update_bits(dai->component, AUD_DAC_SDM_H,
-					      0xff, 0x1);
-		snd_soc_component_update_bits(dai->component, AUD_SDM_CTL0,
-					      0xffff, 0);
 		break;
 	case SNDRV_PCM_STREAM_CAPTURE:
 		fs_mode = ums9230_convert_capture_rate(params_rate(params));
 		if (fs_mode < 0) {
 			dev_err(dai->dev, "invalid capture rate %d\n",
 				params_rate(params));
-			ret = fs_mode;
-			break;
+			return fs_mode;
 		}
 
 		snd_soc_component_update_bits(dai->component, AUD_ADC_CTL,
 					      0xf, fs_mode);
 		break;
 	default:
-		ret = -EINVAL;
-		break;
+		return -EINVAL;
 	}
 
-	pm_runtime_mark_last_busy(dai->dev);
-	pm_runtime_put_autosuspend(dai->dev);
-
-	return ret;
+	return 0;
 }
 
 static const struct snd_soc_dai_ops ums9230_digital_dai_ops = {
@@ -297,15 +236,15 @@ static int ums9230_aud_dev_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, priv);
 
-	priv->num_clks = devm_clk_bulk_get_all(dev, &priv->clks);
-	if (priv->num_clks < 0) {
-		return dev_err_probe(dev, priv->num_clks,
-				     "cannot get clocks");
+	priv->clk = devm_clk_get(dev, NULL);
+	if (IS_ERR(priv->clk)) {
+		return dev_err_probe(dev, PTR_ERR(priv->clk),
+				     "cannot get clock");
 	}
 
-	ret = clk_bulk_prepare_enable(priv->num_clks, priv->clks);
+	ret = clk_prepare_enable(priv->clk);
 	if (ret) {
-		dev_err(dev, "failed to enable clocks\n");
+		dev_err(dev, "failed to enable clock\n");
 		return ret;
 	}
 
@@ -338,7 +277,7 @@ static int __maybe_unused ums9230_aud_runtime_suspend(struct device *dev)
 	regcache_cache_only(priv->regmap, true);
 	regcache_mark_dirty(priv->regmap);
 
-	clk_bulk_disable_unprepare(priv->num_clks, priv->clks);
+	clk_disable_unprepare(priv->clk);
 
 	return 0;
 }
@@ -348,9 +287,9 @@ static int __maybe_unused ums9230_aud_runtime_resume(struct device *dev)
 	struct ums9230_aud_priv *priv = dev_get_drvdata(dev);
 	int ret;
 
-	ret = clk_bulk_prepare_enable(priv->num_clks, priv->clks);
+	ret = clk_prepare_enable(priv->clk);
 	if (ret) {
-		dev_err(dev, "failed to enable clocks\n");
+		dev_err(dev, "failed to enable clock\n");
 		return ret;
 	}
 
@@ -367,8 +306,6 @@ static const struct dev_pm_ops ums9230_aud_pm_ops = {
 
 static const struct of_device_id ums9230_aud_match_table[] = {
 	{ .compatible = "sprd,ums9230-digital-codec" },
-	/* sharkl5pro AGCP digital codec - assumed same regmap (to verify). */
-	{ .compatible = "sprd,ums512-digital-codec" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, ums9230_aud_match_table);

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2025 Otto Pflüger
+ * Copyright (C) 2026 Otto Pflüger
  */
 
 #include <linux/dmaengine.h>
-#include <linux/dma-mapping.h>
+#include <linux/firmware.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_reserved_mem.h>
@@ -33,12 +33,10 @@ struct sprd_vbc_priv {
 	struct sprd_mcdt_chan *mcdt_voice_capture;
 	struct sprd_mcdt_chan *mcdt_playback;
 	struct sprd_mcdt_chan *mcdt_capture;
+
 	struct vbc_startup_params params;
 	u32 iis_lrmod[VBC_NUM_IIS_PORT_IDS];
 	u32 iis_rx[VBC_NUM_IIS_PORT_IDS];
-	u32 iis_master_en;
-	u32 iis_master_width;
-	u32 mst_sel[VBC_NUM_IIS_CONTROLLERS];
 	u32 current_fe_tx[VBC_NUM_TX_IDS];
 	u32 current_fe_rx[VBC_NUM_RX_IDS];
 	u8 voice_mute;
@@ -75,82 +73,65 @@ static u32 vbc_get_fe_rx_id(u32 dai_id)
 	}
 }
 
-static const char * const vbc_tx_enum_texts[] = {
-	"TX0", "TX1", "TX2"
-};
+static const char * const vbc_iis_enum_texts[] = { "IIS0", "IIS1", "IIS2", "IIS3" };
 
-static const char * const vbc_rx_enum_texts[] = {
-	"RX0", "RX1", "RX2", "RX3"
-};
-
-static const char * const vbc_iis_enum_texts[] = {
-	"IIS0", "IIS1", "IIS2", "IIS3"
-};
-
-#define DECLARE_VBC_TX_CONTROL(id)					\
-	static SOC_ENUM_SINGLE_DECL(vbc_tx##id##_demux_enum,		\
-				    SND_SOC_NOPM, id,			\
-				    vbc_iis_enum_texts);		\
-	static const struct snd_kcontrol_new vbc_tx##id##_demux =	\
-		SOC_DAPM_ENUM_EXT("TX" #id " Port Select",		\
-				  vbc_tx##id##_demux_enum,		\
-				  vbc_tx_mux_get,			\
+#define DECLARE_VBC_TX_CONTROL(id)                                             \
+	static SOC_ENUM_SINGLE_DECL(vbc_tx##id##_demux_enum, SND_SOC_NOPM, id, \
+				    vbc_iis_enum_texts);                       \
+	static const struct snd_kcontrol_new vbc_tx##id##_demux =              \
+		SOC_DAPM_ENUM_EXT("TX" #id " Port Select",                     \
+				  vbc_tx##id##_demux_enum, vbc_tx_mux_get,     \
 				  vbc_tx_mux_put)
 
-#define DECLARE_VBC_RX_CONTROL(id) 					\
-	static SOC_ENUM_SINGLE_DECL(vbc_rx##id##_mux_enum,		\
-				    SND_SOC_NOPM, id,			\
-				    vbc_iis_enum_texts);		\
-	static const struct snd_kcontrol_new vbc_rx##id##_mux =		\
-		SOC_DAPM_ENUM_EXT("RX" #id " Port Select",		\
-				  vbc_rx##id##_mux_enum,		\
-				  vbc_rx_mux_get,			\
+#define DECLARE_VBC_RX_CONTROL(id)                                           \
+	static SOC_ENUM_SINGLE_DECL(vbc_rx##id##_mux_enum, SND_SOC_NOPM, id, \
+				    vbc_iis_enum_texts);                     \
+	static const struct snd_kcontrol_new vbc_rx##id##_mux =              \
+		SOC_DAPM_ENUM_EXT("RX" #id " Port Select",                   \
+				  vbc_rx##id##_mux_enum, vbc_rx_mux_get,     \
 				  vbc_rx_mux_put)
 
-#define VBC_IIS_TX_ROUTES(tx_name) \
-	{ "VBC_IIS0 Playback", "IIS0", tx_name " SEL" },	\
-	{ "VBC_IIS1 Playback", "IIS1", tx_name " SEL" },	\
-	{ "VBC_IIS2 Playback", "IIS2", tx_name " SEL" },	\
+#define VBC_IIS_TX_ROUTES(tx_name)                       \
+	{ "VBC_IIS0 Playback", "IIS0", tx_name " SEL" }, \
+	{ "VBC_IIS1 Playback", "IIS1", tx_name " SEL" }, \
+	{ "VBC_IIS2 Playback", "IIS2", tx_name " SEL" }, \
 	{ "VBC_IIS3 Playback", "IIS3", tx_name " SEL" }
 
-#define VBC_IIS_RX_ROUTES(rx_name) \
-	{ rx_name " SEL", "IIS0", "VBC_IIS0 Capture" },	\
-	{ rx_name " SEL", "IIS1", "VBC_IIS1 Capture" },	\
-	{ rx_name " SEL", "IIS2", "VBC_IIS2 Capture" },	\
+#define VBC_IIS_RX_ROUTES(rx_name)                      \
+	{ rx_name " SEL", "IIS0", "VBC_IIS0 Capture" }, \
+	{ rx_name " SEL", "IIS1", "VBC_IIS1 Capture" }, \
+	{ rx_name " SEL", "IIS2", "VBC_IIS2 Capture" }, \
 	{ rx_name " SEL", "IIS3", "VBC_IIS3 Capture" }
 
-#define SPRD_PCM_RATES		(SNDRV_PCM_RATE_8000_48000 |	\
-				 SNDRV_PCM_RATE_12000 |		\
-				 SNDRV_PCM_RATE_24000 |		\
-				 SNDRV_PCM_RATE_96000 |		\
-				 SNDRV_PCM_RATE_192000)
+#define SPRD_PCM_RATES                                      \
+	(SNDRV_PCM_RATE_8000_48000 | SNDRV_PCM_RATE_12000 | \
+	 SNDRV_PCM_RATE_24000 | SNDRV_PCM_RATE_96000 | SNDRV_PCM_RATE_192000)
 
-#define SPRD_BE_DAI(_id)					\
-	{							\
-		.name = #_id,					\
-		.id = (_id),					\
-		.playback = {					\
-			.stream_name = #_id " Playback",	\
-			.channels_min = 1,			\
-			.channels_max = 2,			\
-			.rates = SPRD_PCM_RATES,		\
-			.formats = SNDRV_PCM_FMTBIT_S16_LE,	\
-		},						\
-		.capture = {					\
-			.stream_name = #_id " Capture",		\
-			.channels_min = 1,			\
-			.channels_max = 2,			\
-			.rates = SPRD_PCM_RATES,		\
-			.formats = SNDRV_PCM_FMTBIT_S16_LE,	\
-		},						\
-		.ops = &sprd_be_dai_ops,			\
+#define SPRD_BE_DAI(_id)                                    \
+	{                                                   \
+		.name = #_id,                               \
+		.id = (_id),                                \
+		.playback = {                               \
+			.stream_name = #_id " Playback",    \
+			.channels_min = 1,                  \
+			.channels_max = 2,                  \
+			.rates = SPRD_PCM_RATES,            \
+			.formats = SNDRV_PCM_FMTBIT_S16_LE, \
+		},                                          \
+		.capture = {                                \
+			.stream_name = #_id " Capture",     \
+			.channels_min = 1,                  \
+			.channels_max = 2,                  \
+			.rates = SPRD_PCM_RATES,            \
+			.formats = SNDRV_PCM_FMTBIT_S16_LE, \
+		},                                          \
+		.ops = &sprd_be_dai_ops,                    \
 	}
 
 static int vbc_tx_mux_get(struct snd_kcontrol *kcontrol,
 			  struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_dapm_context *dapm =
-		snd_soc_dapm_kcontrol_to_dapm(kcontrol);
+	struct snd_soc_dapm_context *dapm = snd_soc_dapm_kcontrol_to_dapm(kcontrol);
 	struct soc_enum *e = (struct soc_enum *)kcontrol->private_value;
 	struct snd_soc_component *c = snd_soc_dapm_to_component(dapm);
 	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
@@ -163,25 +144,15 @@ static int vbc_tx_mux_get(struct snd_kcontrol *kcontrol,
 static int vbc_tx_mux_put(struct snd_kcontrol *kcontrol,
 			  struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_dapm_context *dapm =
-		snd_soc_dapm_kcontrol_to_dapm(kcontrol);
+	struct snd_soc_dapm_context *dapm = snd_soc_dapm_kcontrol_to_dapm(kcontrol);
 	struct soc_enum *e = (struct soc_enum *)kcontrol->private_value;
 	struct snd_soc_component *c = snd_soc_dapm_to_component(dapm);
 	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
 	unsigned int value = ucontrol->value.integer.value[0];
-	int i, ret;
+	int ret;
 
-	if (value > VBC_NUM_IIS_PORT_IDS || e->shift_l > VBC_NUM_TX_IDS)
+	if (value > VBC_NUM_IIS_PORT_IDS)
 		return -EINVAL;
-
-	/* Return -EBUSY if the output port is in use by another FE */
-	for (i = 0; i < VBC_NUM_TX_IDS; i++) {
-		if (i != e->shift_l &&
-		    vbc->current_fe_tx[i] != VBC_FE_INVALID &&
-		    vbc->params.mux_tx[i].value ==
-		    vbc->params.mux_tx[e->shift_l].value)
-			return -EBUSY;
-	}
 
 	vbc->params.mux_tx[e->shift_l].value = value;
 	vbc->params.iis_do[value].value = e->shift_l;
@@ -198,8 +169,7 @@ static int vbc_tx_mux_put(struct snd_kcontrol *kcontrol,
 static int vbc_rx_mux_get(struct snd_kcontrol *kcontrol,
 			  struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_dapm_context *dapm =
-		snd_soc_dapm_kcontrol_to_dapm(kcontrol);
+	struct snd_soc_dapm_context *dapm = snd_soc_dapm_kcontrol_to_dapm(kcontrol);
 	struct soc_enum *e = (struct soc_enum *)kcontrol->private_value;
 	struct snd_soc_component *c = snd_soc_dapm_to_component(dapm);
 	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
@@ -212,23 +182,20 @@ static int vbc_rx_mux_get(struct snd_kcontrol *kcontrol,
 static int vbc_rx_mux_put(struct snd_kcontrol *kcontrol,
 			  struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_dapm_context *dapm =
-		snd_soc_dapm_kcontrol_to_dapm(kcontrol);
+	struct snd_soc_dapm_context *dapm = snd_soc_dapm_kcontrol_to_dapm(kcontrol);
 	struct soc_enum *e = (struct soc_enum *)kcontrol->private_value;
 	struct snd_soc_component *c = snd_soc_dapm_to_component(dapm);
 	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
 	unsigned int value = ucontrol->value.integer.value[0];
 	int i;
 
-	if (value > VBC_NUM_IIS_PORT_IDS || e->shift_l > VBC_NUM_RX_IDS)
+	if (value > VBC_NUM_IIS_PORT_IDS)
 		return -EINVAL;
 
 	/* Return -EBUSY if the input port is in use by another FE */
 	for (i = 0; i < VBC_NUM_RX_IDS; i++) {
-		if (i != e->shift_l &&
-		    vbc->current_fe_rx[i] != VBC_FE_INVALID &&
-		    vbc->params.mux_rx[i].value ==
-		    vbc->params.mux_rx[e->shift_l].value)
+		if (vbc->params.mux_rx[i].value == vbc->params.mux_rx[e->shift_l].value &&
+		    i != e->shift_l && vbc->current_fe_rx[i] != VBC_FE_INVALID)
 			return -EBUSY;
 	}
 
@@ -243,8 +210,7 @@ static int vbc_rx_mux_put(struct snd_kcontrol *kcontrol,
 static int vbc_voice_mute_get(struct snd_kcontrol *kcontrol,
 			      struct snd_ctl_elem_value *ucontrol)
 {
-	struct soc_mixer_control *mc =
-		(struct soc_mixer_control *)kcontrol->private_value;
+	struct soc_mixer_control *mc = (struct soc_mixer_control *)kcontrol->private_value;
 	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
 	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
 
@@ -256,8 +222,7 @@ static int vbc_voice_mute_get(struct snd_kcontrol *kcontrol,
 static int vbc_voice_mute_put(struct snd_kcontrol *kcontrol,
 			      struct snd_ctl_elem_value *ucontrol)
 {
-	struct soc_mixer_control *mc =
-		(struct soc_mixer_control *)kcontrol->private_value;
+	struct soc_mixer_control *mc = (struct soc_mixer_control *)kcontrol->private_value;
 	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
 	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
 	bool value = ucontrol->value.integer.value[0];
@@ -271,13 +236,11 @@ static int vbc_voice_mute_put(struct snd_kcontrol *kcontrol,
 static int vbc_voice_record_type_get(struct snd_kcontrol *kcontrol,
 				     struct snd_ctl_elem_value *ucontrol)
 {
-	struct soc_mixer_control *mc =
-		(struct soc_mixer_control *)kcontrol->private_value;
+	struct soc_mixer_control *mc = (struct soc_mixer_control *)kcontrol->private_value;
 	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
 	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
 
-	ucontrol->value.integer.value[0] =
-		(vbc->params.voice_record_type >> mc->shift) & 1;
+	ucontrol->value.integer.value[0] = (vbc->params.voice_record_type >> mc->shift) & 1;
 
 	return 0;
 }
@@ -285,8 +248,7 @@ static int vbc_voice_record_type_get(struct snd_kcontrol *kcontrol,
 static int vbc_voice_record_type_put(struct snd_kcontrol *kcontrol,
 				     struct snd_ctl_elem_value *ucontrol)
 {
-	struct soc_mixer_control *mc =
-		(struct soc_mixer_control *)kcontrol->private_value;
+	struct soc_mixer_control *mc = (struct soc_mixer_control *)kcontrol->private_value;
 	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
 	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
 	bool value = ucontrol->value.integer.value[0];
@@ -300,16 +262,13 @@ static int vbc_voice_record_type_put(struct snd_kcontrol *kcontrol,
 static int vbc_fe_tx_switch_get(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_dapm_context *dapm =
-		snd_soc_dapm_kcontrol_to_dapm(kcontrol);
-	struct soc_mixer_control *mc =
-		(struct soc_mixer_control *)kcontrol->private_value;
+	struct snd_soc_dapm_context *dapm = snd_soc_dapm_kcontrol_to_dapm(kcontrol);
+	struct soc_mixer_control *mc = (struct soc_mixer_control *)kcontrol->private_value;
 	struct snd_soc_component *c = snd_soc_dapm_to_component(dapm);
 	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
 	u32 tx_id = vbc_get_fe_tx_id(mc->shift);
 
-	ucontrol->value.integer.value[0] =
-		vbc->current_fe_tx[tx_id] == mc->shift;
+	ucontrol->value.integer.value[0] = vbc->current_fe_tx[tx_id] == mc->shift;
 
 	return 0;
 }
@@ -317,31 +276,20 @@ static int vbc_fe_tx_switch_get(struct snd_kcontrol *kcontrol,
 static int vbc_fe_tx_switch_put(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_dapm_context *dapm =
-		snd_soc_dapm_kcontrol_to_dapm(kcontrol);
-	struct soc_mixer_control *mc =
-		(struct soc_mixer_control *)kcontrol->private_value;
+	struct snd_soc_dapm_context *dapm = snd_soc_dapm_kcontrol_to_dapm(kcontrol);
+	struct soc_mixer_control *mc = (struct soc_mixer_control *)kcontrol->private_value;
 	struct snd_soc_component *c = snd_soc_dapm_to_component(dapm);
 	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
 	u32 tx_id = vbc_get_fe_tx_id(mc->shift);
 
 	if (ucontrol->value.integer.value[0]) {
-		int i = 0;
-
 		/* Do nothing if already turned on */
 		if (vbc->current_fe_tx[tx_id] == mc->shift)
 			return 0;
 
-		/*
-		 * Return -EBUSY if any active FE is connected to the same
-		 * output port.
-		 */
-		for (i = 0; i < VBC_NUM_TX_IDS; i++) {
-			if (vbc->current_fe_tx[i] != VBC_FE_INVALID &&
-			    vbc->params.mux_tx[i].value ==
-			    vbc->params.mux_tx[tx_id].value)
-				return -EBUSY;
-		}
+		/* Return -EBUSY if a FE is active in the same TX group */
+		if (vbc->current_fe_tx[tx_id] != VBC_FE_INVALID)
+			return -EBUSY;
 
 		vbc->current_fe_tx[tx_id] = mc->shift;
 
@@ -349,8 +297,7 @@ static int vbc_fe_tx_switch_put(struct snd_kcontrol *kcontrol,
 	} else {
 		if (vbc->current_fe_tx[tx_id] == mc->shift) {
 			vbc->current_fe_tx[tx_id] = VBC_FE_INVALID;
-			snd_soc_dapm_mixer_update_power(dapm, kcontrol,
-							0, NULL);
+			snd_soc_dapm_mixer_update_power(dapm, kcontrol, 0, NULL);
 		}
 	}
 
@@ -360,16 +307,13 @@ static int vbc_fe_tx_switch_put(struct snd_kcontrol *kcontrol,
 static int vbc_fe_rx_switch_get(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_dapm_context *dapm =
-		snd_soc_dapm_kcontrol_to_dapm(kcontrol);
-	struct soc_mixer_control *mc =
-		(struct soc_mixer_control *)kcontrol->private_value;
+	struct snd_soc_dapm_context *dapm = snd_soc_dapm_kcontrol_to_dapm(kcontrol);
+	struct soc_mixer_control *mc = (struct soc_mixer_control *)kcontrol->private_value;
 	struct snd_soc_component *c = snd_soc_dapm_to_component(dapm);
 	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
 	u32 rx_id = vbc_get_fe_rx_id(mc->shift);
 
-	ucontrol->value.integer.value[0] =
-		vbc->current_fe_rx[rx_id] == mc->shift;
+	ucontrol->value.integer.value[0] = vbc->current_fe_rx[rx_id] == mc->shift;
 
 	return 0;
 }
@@ -377,10 +321,8 @@ static int vbc_fe_rx_switch_get(struct snd_kcontrol *kcontrol,
 static int vbc_fe_rx_switch_put(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_dapm_context *dapm =
-		snd_soc_dapm_kcontrol_to_dapm(kcontrol);
-	struct soc_mixer_control *mc =
-		(struct soc_mixer_control *)kcontrol->private_value;
+	struct snd_soc_dapm_context *dapm = snd_soc_dapm_kcontrol_to_dapm(kcontrol);
+	struct soc_mixer_control *mc = (struct soc_mixer_control *)kcontrol->private_value;
 	struct snd_soc_component *c = snd_soc_dapm_to_component(dapm);
 	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
 	u32 rx_id = vbc_get_fe_rx_id(mc->shift);
@@ -398,8 +340,7 @@ static int vbc_fe_rx_switch_put(struct snd_kcontrol *kcontrol,
 		 */
 		for (i = 0; i < VBC_NUM_RX_IDS; i++) {
 			if (vbc->current_fe_rx[i] != VBC_FE_INVALID &&
-			    vbc->params.mux_rx[i].value ==
-			    vbc->params.mux_rx[rx_id].value)
+			    vbc->params.mux_rx[i].value == vbc->params.mux_rx[rx_id].value)
 				return -EBUSY;
 		}
 
@@ -409,29 +350,28 @@ static int vbc_fe_rx_switch_put(struct snd_kcontrol *kcontrol,
 	} else {
 		if (vbc->current_fe_rx[rx_id] == mc->shift) {
 			vbc->current_fe_rx[rx_id] = VBC_FE_INVALID;
-			snd_soc_dapm_mixer_update_power(dapm, kcontrol,
-							0, NULL);
+			snd_soc_dapm_mixer_update_power(dapm, kcontrol, 0, NULL);
 		}
 	}
 
 	return 0;
 }
 
-static const char *vbc_mixer_mode_texts[] = {
-	"NOT_MIX", "INTERCHANGE", "HALF_ADD", "HALF_SUB",
+static const char * const vbc_mixer_mode_texts[] = {
+	"NOT_MIX",  "INTERCHANGE",     "HALF_ADD",     "HALF_SUB",
 	"DATA_INV", "INTERCHANGE_INV", "HALF_ADD_INV", "HALF_SUB_INV",
 };
 
-static SOC_ENUM_SINGLE_DECL(vbc_mixer0_tx0_enum, SND_SOC_NOPM,
-			    VBC_MIXER0_TX0, vbc_mixer_mode_texts);
-static SOC_ENUM_SINGLE_DECL(vbc_mixer1_tx0_enum, SND_SOC_NOPM,
-			    VBC_MIXER1_TX0, vbc_mixer_mode_texts);
-static SOC_ENUM_SINGLE_DECL(vbc_mixer0_tx1_enum, SND_SOC_NOPM,
-			    VBC_MIXER0_TX1, vbc_mixer_mode_texts);
-static SOC_ENUM_SINGLE_DECL(vbc_mixer_st_enum, SND_SOC_NOPM,
-			    VBC_MIXER_ST, vbc_mixer_mode_texts);
-static SOC_ENUM_SINGLE_DECL(vbc_mixer_fm_enum, SND_SOC_NOPM,
-			    VBC_MIXER_FM, vbc_mixer_mode_texts);
+static SOC_ENUM_SINGLE_DECL(vbc_mixer0_tx0_enum, SND_SOC_NOPM, VBC_MIXER0_TX0,
+			    vbc_mixer_mode_texts);
+static SOC_ENUM_SINGLE_DECL(vbc_mixer1_tx0_enum, SND_SOC_NOPM, VBC_MIXER1_TX0,
+			    vbc_mixer_mode_texts);
+static SOC_ENUM_SINGLE_DECL(vbc_mixer0_tx1_enum, SND_SOC_NOPM, VBC_MIXER0_TX1,
+			    vbc_mixer_mode_texts);
+static SOC_ENUM_SINGLE_DECL(vbc_mixer_st_enum, SND_SOC_NOPM, VBC_MIXER_ST,
+			    vbc_mixer_mode_texts);
+static SOC_ENUM_SINGLE_DECL(vbc_mixer_fm_enum, SND_SOC_NOPM, VBC_MIXER_FM,
+			    vbc_mixer_mode_texts);
 
 static int vbc_mixer_mode_get(struct snd_kcontrol *kcontrol,
 			      struct snd_ctl_elem_value *ucontrol)
@@ -440,8 +380,7 @@ static int vbc_mixer_mode_get(struct snd_kcontrol *kcontrol,
 	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
 	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
 
-	ucontrol->value.integer.value[0] =
-		vbc->params.mixer[e->shift_l].type.value;
+	ucontrol->value.integer.value[0] = vbc->params.mixer[e->shift_l].type.value;
 
 	return 0;
 }
@@ -453,8 +392,7 @@ static int vbc_mixer_mode_put(struct snd_kcontrol *kcontrol,
 	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
 	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
 
-	vbc->params.mixer[e->shift_l].type.value =
-		ucontrol->value.integer.value[0];
+	vbc->params.mixer[e->shift_l].type.value = ucontrol->value.integer.value[0];
 
 	return sprd_agdsp_send_cmd(vbc->ipc, AGDSP_CH_VBC_CTL,
 				   VBC_DSP_IO_KCTL_SET, VBC_CTL_MIXER, -1,
@@ -462,178 +400,23 @@ static int vbc_mixer_mode_put(struct snd_kcontrol *kcontrol,
 				   sizeof(struct vbc_mixer_ctrl));
 }
 
-/*
- * DSP-side VBC IIS master clock.
- *
- * On UMS512 the IIS0 BCLK/LRCLK that paces samples out to the AON digital
- * codec is generated inside the AGCP/DSP, not by the codec (the vendor's AON
- * "virt mclk" path is a no-op stub on this SoC). The AGDSP firmware only does
- * so when the AP asks it to via these kcontrols; without them IIS0 stays in
- * slave/external mode and the DSP free-runs into an unclocked interface. Mirror
- * the vendor controls so the master can be selected (internal) and started.
- */
-static int vbc_iis_master_en_get(struct snd_kcontrol *kcontrol,
-				 struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
-	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
-
-	ucontrol->value.integer.value[0] = vbc->iis_master_en;
-
-	return 0;
-}
-
-static int vbc_iis_master_en_put(struct snd_kcontrol *kcontrol,
-				 struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
-	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
-	struct vbc_iis_master_ctrl params = {
-		.vbc_startup_reload = 0,
-		.enable = ucontrol->value.integer.value[0],
-	};
-
-	vbc->iis_master_en = params.enable;
-
-	/*
-	 * Carry the master state in the startup params with reload=1 so the
-	 * AGDSP (re)applies it every time a stream starts. The firmware does
-	 * not honor a bare live KCTL set on this build, so the startup path is
-	 * the one that matters; we still send the live command for parity.
-	 */
-	vbc->params.iis_master.vbc_startup_reload = 1;
-	vbc->params.iis_master.enable = params.enable;
-
-	return sprd_agdsp_send_cmd(vbc->ipc, AGDSP_CH_VBC_CTL,
-				   VBC_DSP_IO_KCTL_SET, VBC_CTL_IIS_MASTER_START,
-				   -1, &params, sizeof(params));
-}
-
-static int vbc_iis_master_width_get(struct snd_kcontrol *kcontrol,
-				    struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
-	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
-
-	ucontrol->value.integer.value[0] = vbc->iis_master_width;
-
-	return 0;
-}
-
-static int vbc_iis_master_width_put(struct snd_kcontrol *kcontrol,
-				    struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
-	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
-	u32 width = ucontrol->value.integer.value[0];
-
-	vbc->iis_master_width = width;
-
-	return sprd_agdsp_send_cmd(vbc->ipc, AGDSP_CH_VBC_CTL,
-				   VBC_DSP_IO_KCTL_SET,
-				   VBC_CTL_IIS_MASTER_WIDTH_SET,
-				   -1, &width, sizeof(width));
-}
-
-static int vbc_iis_mst_sel_get(struct snd_kcontrol *kcontrol,
-			       struct snd_ctl_elem_value *ucontrol)
-{
-	struct soc_mixer_control *mc =
-		(struct soc_mixer_control *)kcontrol->private_value;
-	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
-	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
-
-	ucontrol->value.integer.value[0] = vbc->mst_sel[mc->shift];
-
-	return 0;
-}
-
-static int vbc_iis_mst_sel_put(struct snd_kcontrol *kcontrol,
-			       struct snd_ctl_elem_value *ucontrol)
-{
-	struct soc_mixer_control *mc =
-		(struct soc_mixer_control *)kcontrol->private_value;
-	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
-	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
-	u32 value = ucontrol->value.integer.value[0];
-
-	vbc->mst_sel[mc->shift] = value;
-
-	/* Carried in the startup params (applied at stream start). */
-	vbc->params.mst_sel[mc->shift].id = mc->shift;
-	vbc->params.mst_sel[mc->shift].value = value;
-
-	/* mst_type: 0 = external, 1 = internal (DSP generates the clock) */
-	return vbc_cmd_set_ctrl(vbc, VBC_CTL_EXT_INNER_IIS_MST_SEL,
-				mc->shift, value);
-}
-
-/*
- * DAC output source mux. Selects where the AON DAC pulls its samples from:
- * 0 = from an external IIS port, 1 = from VBCIF (the internal VBC->DAC path
- * used for the on-board speaker). Mainline never set this, so the firmware
- * defaulted DAC0 to the (unclocked, empty) IIS source. Carry it in the
- * startup params (tx_out[]) so it is applied when the stream starts.
- */
-static int vbc_dac_out_get(struct snd_kcontrol *kcontrol,
-			   struct snd_ctl_elem_value *ucontrol)
-{
-	struct soc_mixer_control *mc =
-		(struct soc_mixer_control *)kcontrol->private_value;
-	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
-	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
-
-	ucontrol->value.integer.value[0] = vbc->params.tx_out[mc->shift].value;
-
-	return 0;
-}
-
-static int vbc_dac_out_put(struct snd_kcontrol *kcontrol,
-			   struct snd_ctl_elem_value *ucontrol)
-{
-	struct soc_mixer_control *mc =
-		(struct soc_mixer_control *)kcontrol->private_value;
-	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
-	struct sprd_vbc_priv *vbc = dev_get_drvdata(c->dev);
-	u32 value = ucontrol->value.integer.value[0];
-
-	vbc->params.tx_out[mc->shift].id = mc->shift;
-	vbc->params.tx_out[mc->shift].value = value;
-
-	return vbc_cmd_set_ctrl(vbc, VBC_CTL_MUX_DAC_OUT, mc->shift, value);
-}
-
 static const struct snd_kcontrol_new sprd_vbc_controls[] = {
-	SOC_SINGLE_EXT("VBC DAC0 Out VBCIF", SND_SOC_NOPM, 0, 1, 0,
-		       vbc_dac_out_get, vbc_dac_out_put),
-
-	SOC_SINGLE_EXT("VBC IIS Master Enable", SND_SOC_NOPM, 0, 1, 0,
-		       vbc_iis_master_en_get, vbc_iis_master_en_put),
-	SOC_SINGLE_EXT("VBC IIS Master Width 24bit", SND_SOC_NOPM, 0, 1, 0,
-		       vbc_iis_master_width_get, vbc_iis_master_width_put),
-	SOC_SINGLE_EXT("VBC IIS0 Master Internal", SND_SOC_NOPM, 0, 1, 0,
-		       vbc_iis_mst_sel_get, vbc_iis_mst_sel_put),
-
 	SOC_SINGLE_EXT("Voice Mute Uplink", SND_SOC_NOPM, 0, 1, 0,
-		       vbc_voice_mute_get,
-		       vbc_voice_mute_put),
+		       vbc_voice_mute_get, vbc_voice_mute_put),
 	SOC_SINGLE_EXT("Voice Mute Downlink", SND_SOC_NOPM, 1, 1, 0,
-		       vbc_voice_mute_get,
-		       vbc_voice_mute_put),
+		       vbc_voice_mute_get, vbc_voice_mute_put),
 
 	SOC_SINGLE_EXT("Voice Record Uplink", SND_SOC_NOPM, 1, 1, 0,
-		       vbc_voice_record_type_get,
-		       vbc_voice_record_type_put),
+		       vbc_voice_record_type_get, vbc_voice_record_type_put),
 	SOC_SINGLE_EXT("Voice Record Downlink", SND_SOC_NOPM, 0, 1, 0,
-		       vbc_voice_record_type_get,
-		       vbc_voice_record_type_put),
+		       vbc_voice_record_type_get, vbc_voice_record_type_put),
 
-	SOC_ENUM_EXT("TX0 MIXER0 Mode", vbc_mixer0_tx0_enum,
-		     vbc_mixer_mode_get, vbc_mixer_mode_put),
-	SOC_ENUM_EXT("TX0 MIXER1 Mode", vbc_mixer1_tx0_enum,
-		     vbc_mixer_mode_get, vbc_mixer_mode_put),
-	SOC_ENUM_EXT("TX1 MIXER0 Mode", vbc_mixer0_tx1_enum,
-		     vbc_mixer_mode_get, vbc_mixer_mode_put),
+	SOC_ENUM_EXT("TX0 MIXER0 Mode", vbc_mixer0_tx0_enum, vbc_mixer_mode_get,
+		     vbc_mixer_mode_put),
+	SOC_ENUM_EXT("TX0 MIXER1 Mode", vbc_mixer1_tx0_enum, vbc_mixer_mode_get,
+		     vbc_mixer_mode_put),
+	SOC_ENUM_EXT("TX1 MIXER0 Mode", vbc_mixer0_tx1_enum, vbc_mixer_mode_get,
+		     vbc_mixer_mode_put),
 };
 
 DECLARE_VBC_TX_CONTROL(0);
@@ -708,7 +491,21 @@ static int sprd_vbc_fe_startup(struct snd_pcm_substream *substream,
 			       struct snd_soc_dai *fe_dai)
 {
 	struct sprd_vbc_priv *vbc = dev_get_drvdata(fe_dai->dev);
+	u64 access;
 	int ret;
+
+	/*
+	 * No access types are set for FE_VOICE because the data transfer for
+	 * voice calls is managed by the modem.
+	 */
+	if (fe_dai->id != VBC_FE_VOICE) {
+		access = 1ULL << (__force int)SNDRV_PCM_ACCESS_MMAP_INTERLEAVED |
+			 1ULL << (__force int)SNDRV_PCM_ACCESS_RW_INTERLEAVED;
+		ret = snd_pcm_hw_constraint_mask64(substream->runtime, SNDRV_PCM_HW_PARAM_ACCESS,
+						   access);
+		if (ret)
+			return ret;
+	}
 
 	vbc->params.fe_id = fe_dai->id;
 	vbc->params.stream = substream->stream;
@@ -757,8 +554,8 @@ static void sprd_vbc_fe_shutdown(struct snd_pcm_substream *substream,
 
 	vbc->params.fe_id = fe_dai->id;
 	vbc->params.stream = substream->stream;
-	vbc->params.tx_id = 0;
-	vbc->params.rx_id = 0;
+	vbc->params.tx_id = vbc_get_fe_tx_id(fe_dai->id);
+	vbc->params.rx_id = vbc_get_fe_rx_id(fe_dai->id);
 
 	if (fe_dai->id == VBC_FE_VOICE)
 		vbc->voice_started &= ~(1 << substream->stream);
@@ -781,9 +578,8 @@ static int sprd_vbc_fe_trigger(struct snd_pcm_substream *substream, int cmd,
 	case SNDRV_PCM_TRIGGER_RESUME:
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
 		return sprd_agdsp_send_msg(vbc->ipc, AGDSP_CH_VBC_CTL,
-					   VBC_DSP_FUNC_HW_TRIGGER,
-					   fe_dai->id, substream->stream,
-					   1, 0);
+					   VBC_DSP_FUNC_HW_TRIGGER, fe_dai->id,
+					   substream->stream, 1, 0);
 
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
@@ -793,12 +589,10 @@ static int sprd_vbc_fe_trigger(struct snd_pcm_substream *substream, int cmd,
 	}
 }
 
-static struct sprd_mcdt_chan *sprd_vbc_get_mcdt(
-					struct sprd_vbc_priv *vbc,
-					int dai_id,
-					enum sprd_mcdt_dma_chan *mcdt_dma,
-					u32 *mcdt_dma_watermark,
-					const char **mcdt_dma_name)
+static struct sprd_mcdt_chan *
+sprd_vbc_get_mcdt(struct sprd_vbc_priv *vbc, int dai_id,
+		  enum sprd_mcdt_dma_chan *mcdt_dma, u32 *mcdt_dma_watermark,
+		  const char **mcdt_dma_name)
 {
 	struct sprd_mcdt_chan *chan;
 	enum sprd_mcdt_dma_chan dma;
@@ -828,7 +622,8 @@ static struct sprd_mcdt_chan *sprd_vbc_get_mcdt(
 		/* MCDT channel is controlled by modem */
 		return NULL;
 	default:
-		dev_err(vbc->dev, "unexpected FE DAI ID %d\n", dai_id);
+		/* All FEs should be handled above */
+		WARN_ON(1);
 		return ERR_PTR(-EINVAL);
 	}
 
@@ -860,7 +655,7 @@ static int sprd_vbc_fe_hw_params(struct snd_pcm_substream *substream,
 	u32 watermark;
 	int ret;
 
-	dma_data = kzalloc(sizeof(*dma_data), GFP_KERNEL);
+	dma_data = kzalloc_obj(*dma_data, GFP_KERNEL);
 	if (!dma_data)
 		return -ENOMEM;
 
@@ -912,8 +707,7 @@ static int sprd_vbc_fe_hw_params(struct snd_pcm_substream *substream,
 		hw_params.rate = 11;
 		break;
 	default:
-		dev_err(fe_dai->dev, "unsupported rate: %d\n", 
-			params_rate(params));
+		dev_err(fe_dai->dev, "unsupported rate: %d\n", params_rate(params));
 		kfree(dma_data);
 		return -EINVAL;
 	}
@@ -948,9 +742,7 @@ static int sprd_vbc_fe_hw_params(struct snd_pcm_substream *substream,
 	 * different method.
 	 */
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-		ret = vbc_cmd_set_ctrl(vbc, VBC_CTL_SRC,
-				       fe_dai->id == VBC_FE_VOICE ? 1 : 0,
-				       rate);
+		ret = vbc_cmd_set_ctrl(vbc, VBC_CTL_SRC, vbc_get_fe_tx_id(fe_dai->id), rate);
 		if (ret)
 			return ret;
 	}
@@ -961,9 +753,8 @@ static int sprd_vbc_fe_hw_params(struct snd_pcm_substream *substream,
 static int sprd_vbc_fe_hw_free(struct snd_pcm_substream *substream,
 			       struct snd_soc_dai *fe_dai)
 {
+	struct sprd_pcm_dma_params *dma_data = snd_soc_dai_get_dma_data(fe_dai, substream);
 	struct sprd_vbc_priv *vbc = dev_get_drvdata(fe_dai->dev);
-	struct sprd_pcm_dma_params *dma_data =
-		snd_soc_dai_get_dma_data(fe_dai, substream);
 	struct sprd_mcdt_chan *mcdt_chan;
 
 	if (!dma_data)
@@ -986,15 +777,41 @@ static const struct snd_soc_dai_ops sprd_fe_dai_ops = {
 	.hw_free = sprd_vbc_fe_hw_free,
 };
 
+static int sprd_vbc_config_iis_tx(struct sprd_vbc_priv *vbc, int idx, u32 width, u32 lrmod)
+{
+	int ret;
+
+	vbc->params.tx_wd[idx].value = width;
+	vbc->params.tx_lr_mod[idx].value = lrmod;
+
+	ret = vbc_cmd_set_ctrl(vbc, VBC_CTL_IIS_TX_WIDTH_SEL, idx, width);
+	if (ret)
+		return ret;
+
+	return vbc_cmd_set_ctrl(vbc, VBC_CTL_IIS_TX_LRMOD_SEL, idx, lrmod);
+}
+
+static int sprd_vbc_config_iis_rx(struct sprd_vbc_priv *vbc, int idx, u32 width, u32 lrmod)
+{
+	int ret;
+
+	vbc->params.rx_wd[idx].value = width;
+	vbc->params.rx_lr_mod[idx].value = lrmod;
+
+	ret = vbc_cmd_set_ctrl(vbc, VBC_CTL_IIS_RX_WIDTH_SEL, idx, width);
+	if (ret)
+		return ret;
+
+	return vbc_cmd_set_ctrl(vbc, VBC_CTL_IIS_RX_LRMOD_SEL, idx, lrmod);
+}
+
 static int sprd_vbc_be_hw_params(struct snd_pcm_substream *substream,
 				 struct snd_pcm_hw_params *params,
 				 struct snd_soc_dai *be_dai)
 {
-	bool is_playback = substream->stream == SNDRV_PCM_STREAM_PLAYBACK;
 	struct sprd_vbc_priv *vbc = dev_get_drvdata(be_dai->dev);
-	struct vbc_simple_ctrl *width_params, *lrmod_params;
-	u32 idx, width_ctl, lrmod_ctl, width;
-	int ret;
+	int i, ret, iis_id;
+	u32 width, lrmod;
 
 	switch (params_format(params)) {
 	case SNDRV_PCM_FORMAT_S16_LE:
@@ -1008,40 +825,30 @@ static int sprd_vbc_be_hw_params(struct snd_pcm_substream *substream,
 		return -EINVAL;
 	}
 
-	if (be_dai->id < VBC_IIS0) {
-		dev_err(be_dai->dev, "unrecognized backend DAI %d\n",
-			be_dai->id);
-		return -EINVAL;
-	}
+	iis_id = be_dai->id - VBC_IIS0;
+	WARN_ON(iis_id < 0 || iis_id >= VBC_NUM_IIS_PORT_IDS);
 
-	if (is_playback) {
-		idx = vbc->params.iis_do[be_dai->id - VBC_IIS0].value;
-		width_ctl = VBC_CTL_IIS_TX_WIDTH_SEL;
-		width_params = &vbc->params.tx_wd[idx];
-		lrmod_ctl = VBC_CTL_IIS_TX_LRMOD_SEL;
-		lrmod_params = &vbc->params.tx_lr_mod[idx];
+	lrmod = vbc->iis_lrmod[iis_id];
+
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
+		for (i = 0; i < VBC_NUM_TX_IDS; i++) {
+			if (vbc->params.mux_tx[i].value != iis_id)
+				continue;
+
+			ret = sprd_vbc_config_iis_tx(vbc, i, width, lrmod);
+			if (ret)
+				return ret;
+		}
 	} else {
-		idx = vbc->iis_rx[be_dai->id - VBC_IIS0];
-		width_ctl = VBC_CTL_IIS_RX_WIDTH_SEL;
-		width_params = &vbc->params.rx_wd[idx];
-		lrmod_ctl = VBC_CTL_IIS_RX_LRMOD_SEL;
-		lrmod_params = &vbc->params.rx_lr_mod[idx];
+		for (i = 0; i < VBC_NUM_RX_IDS; i++) {
+			if (vbc->params.mux_rx[i].value != iis_id)
+				continue;
+
+			ret = sprd_vbc_config_iis_rx(vbc, i, width, lrmod);
+			if (ret)
+				return ret;
+		}
 	}
-
-	width_params->value = width;
-	lrmod_params->value = vbc->iis_lrmod[be_dai->id - VBC_IIS0];
-
-	ret = sprd_agdsp_send_cmd(vbc->ipc, AGDSP_CH_VBC_CTL,
-				  VBC_DSP_IO_KCTL_SET, width_ctl, -1,
-				  width_params, sizeof(*width_params));
-	if (ret)
-		return ret;
-
-	ret = sprd_agdsp_send_cmd(vbc->ipc, AGDSP_CH_VBC_CTL,
-				  VBC_DSP_IO_KCTL_SET, lrmod_ctl, -1,
-				  lrmod_params, sizeof(*lrmod_params));
-	if (ret)
-		return ret;
 
 	return 0;
 }
@@ -1069,12 +876,7 @@ static int sprd_vbc_be_set_fmt(struct snd_soc_dai *be_dai, unsigned int fmt)
 		return -EINVAL;
 	}
 
-	if (be_dai->id < VBC_IIS0) {
-		dev_err(be_dai->dev, "unrecognized backend DAI %d\n",
-			be_dai->id);
-		return -EINVAL;
-	}
-
+	WARN_ON(be_dai->id < VBC_IIS0);
 	vbc->iis_lrmod[be_dai->id - VBC_IIS0] = lrmod;
 
 	/*
@@ -1190,8 +992,8 @@ static void sprd_vbc_init_params(struct sprd_vbc_priv *vbc)
 	for (i = 0; i < VBC_NUM_IIS_PORT_IDS; i++)
 		vbc->params.iis_do[i].id = i;
 
-	for (i = 0; i < VBC_MUTEDG_NUM; i++)
-		vbc->params.mutedg[i].id = i;
+	for (i = 0; i < VBC_MDG_NUM; i++)
+		vbc->params.mdg[i].id = i;
 
 	for (i = 0; i < VBC_SMTHDG_NUM; i++) {
 		vbc->params.smthdg[i].dg.id = i;
@@ -1226,8 +1028,7 @@ static int sprd_vbc_probe(struct platform_device *pdev)
 
 	vbc->ipc = sprd_get_agdsp_ipc(dev->of_node, "sprd,dsp");
 	if (IS_ERR(vbc->ipc))
-		return dev_err_probe(dev, PTR_ERR(vbc->ipc),
-				     "failed to get DSP handle\n");
+		return dev_err_probe(dev, PTR_ERR(vbc->ipc), "failed to get DSP handle\n");
 
 	ret = of_reserved_mem_device_init(dev);
 	if (ret) {
@@ -1235,24 +1036,21 @@ static int sprd_vbc_probe(struct platform_device *pdev)
 		goto free_ipc;
 	}
 
-	vbc->mcdt_voice_capture =
-		sprd_mcdt_request_chan(2, SPRD_MCDT_ADC_CHAN);
+	vbc->mcdt_voice_capture = sprd_mcdt_request_chan(2, SPRD_MCDT_ADC_CHAN);
 	if (!vbc->mcdt_voice_capture) {
 		dev_err(dev, "cannot get MCDT voice capture channel\n");
 		ret = -ENODEV;
 		goto free_ipc;
 	}
 
-	vbc->mcdt_playback =
-		sprd_mcdt_request_chan(4, SPRD_MCDT_DAC_CHAN);
+	vbc->mcdt_playback = sprd_mcdt_request_chan(4, SPRD_MCDT_DAC_CHAN);
 	if (!vbc->mcdt_playback) {
 		dev_err(dev, "cannot get MCDT playback channel\n");
 		ret = -ENODEV;
 		goto free_voice_capture;
 	}
 
-	vbc->mcdt_capture =
-		sprd_mcdt_request_chan(4, SPRD_MCDT_ADC_CHAN);
+	vbc->mcdt_capture = sprd_mcdt_request_chan(4, SPRD_MCDT_ADC_CHAN);
 	if (!vbc->mcdt_capture) {
 		dev_err(dev, "cannot get MCDT capture channel\n");
 		ret = -ENODEV;
@@ -1287,8 +1085,6 @@ static void sprd_vbc_remove(struct platform_device *pdev)
 
 static const struct of_device_id sprd_vbc_of_match[] = {
 	{ .compatible = "sprd,ums9230-vbc" },
-	/* IPC-only (no MMIO): same AGDSP VBC_CTL ABI as ums9230. */
-	{ .compatible = "sprd,ums512-vbc" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, sprd_vbc_of_match);

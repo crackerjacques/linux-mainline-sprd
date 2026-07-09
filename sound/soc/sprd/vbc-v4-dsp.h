@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * VBC V4 DSP command definitions
  *
@@ -34,11 +34,11 @@ enum {
 };
 
 enum {
-	VBC_MUTEDG_TX0_DSP,
-	VBC_MUTEDG_TX1_DSP,
-	VBC_MUTEDG_AP01,
-	VBC_MUTEDG_AP23,
-	VBC_MUTEDG_NUM
+	VBC_MDG_TX0_DSP,
+	VBC_MDG_TX1_DSP,
+	VBC_MDG_AP01,
+	VBC_MDG_AP23,
+	VBC_MDG_NUM
 };
 
 enum {
@@ -79,7 +79,7 @@ struct vbc_iis_master_ctrl {
 	u32 enable;
 } __packed;
 
-struct vbc_mutedg_ctrl {
+struct vbc_mdg_ctrl {
 	u32 vbc_startup_reload;
 	u32 id;
 	u32 mute;
@@ -148,7 +148,7 @@ struct vbc_startup_params {
 	struct vbc_simple_ctrl rx_lr_mod[VBC_NUM_RX_IDS];
 	struct vbc_loopback_ctrl loopback;
 	struct vbc_iis_master_ctrl iis_master;
-	struct vbc_mutedg_ctrl mutedg[VBC_MUTEDG_NUM];
+	struct vbc_mdg_ctrl mdg[VBC_MDG_NUM];
 	struct vbc_smthdg_module_ctrl smthdg[VBC_SMTHDG_NUM];
 	struct vbc_mixerdg_module_ctrl mixerdg[VBC_MIXERDG_NUM];
 	u32 mixerdg_step;
@@ -256,9 +256,9 @@ enum {
 enum {
 	VBC_PROFILE_AUDIO_STRUCTURE,
 	VBC_PROFILE_DSP,
-	VBC_PROFILE_NXP,
+	VBC_PROFILE_CVS,
 	VBC_PROFILE_IVS_SMARTPA,
-	VBC_SHM_VBC_REG,
+	VBC_NUM_PROFILES,
 };
 
 #endif

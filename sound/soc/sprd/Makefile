@@ -11,3 +11,4 @@ obj-$(CONFIG_SND_SOC_SPRD_MCDT) += sprd-mcdt.o
 obj-$(CONFIG_SND_SOC_SPRD_PLATFORM) += snd-soc-sprd-platform.o
 obj-$(CONFIG_SND_SOC_SPRD_UMS9230) += snd-soc-ums9230.o
 obj-$(CONFIG_SND_SOC_SPRD_VBC_V4_DSP) += snd-soc-vbc-v4-dsp.o
+obj-$(CONFIG_SND_SOC_UNISOC_VBC_V4_SC2730) += vendor/

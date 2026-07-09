@@ -8,6 +8,7 @@
 #include <dt-bindings/gpio/gpio.h>
 #include "ums512.dtsi"
 #include "sc2730.dtsi"
+#include "sprd-sound-fe-be.dtsi"
 
 / {
 	model = "Anbernic RG Rotate";
@@ -197,6 +198,25 @@
 	status = "okay";
 	monitored-battery = <&bat>;
 	sprd,calib-resistance-micro-ohms = <10000>;
+};
+
+&sc2730_codec {
+	status = "okay";
+	sprd,syscon-pmu-apb = <&pmu_apb_regs>;
+	hp-use-inter-pa = <1>;
+	fixed-sample-rate = <48000 48000 48000>;
+	digital-codec = <&sprd_audio_codec_dig>;
+};
+
+/*
+ * Full stock ASoC card (unisoc,vbc-v4-codec-sc2730). The speaker PA is
+ * an aw87xxx on GPIO 9 driven by the card's ext-PA pulse hook
+ * (4 pulses then high = gain preset), exactly as stock.
+ */
+&sound_vbc_v4_sprd_codec {
+	status = "okay";
+	sprd,spk-ext-pa-info = <0 0 0 0>;
+	sprd,spk-ext-pa-gpio = <&ap_gpio 9 1>;
 };
 
 &pinctrl {
@@ -464,11 +484,10 @@
 	#address-cells = <1>;
 	#size-cells = <0>;
 
-	speaker_amp: audio-codec@58 {
-		/* Anbernic reused a previously mainlined awinic 87xxx amp */
-		compatible = "anbernic,rgds-amp";
-		reg = <0x58>;
-		sound-name-prefix = "Speaker Amp";
-	};
+	/*
+	 * The aw87xxx speaker amp at i2c 0x58 is deliberately NOT declared:
+	 * stock drives it purely via the GPIO-9 pulse hook in the sprd
+	 * machine card (sprd,spk-ext-pa-gpio above); an i2c driver would be
+	 * a second, conflicting control path.
+	 */
 };
-

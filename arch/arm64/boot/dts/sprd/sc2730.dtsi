@@ -99,6 +99,23 @@
 			adc_small_scale: adc-small-scale@26 {
 				reg = <0x26 0x2>;
 			};
+
+			/* audio codec calibration cells (stock offsets) */
+			aud_pabst_vcal: aud-pabst-vcal@20 {
+				reg = <0x20 0x2>;
+			};
+
+			neg_cp: neg-cp@22 {
+				reg = <0x22 0x2>;
+			};
+
+			fgu_4p2: fgu-4p2@6 {
+				reg = <0x6 0x2>;
+			};
+
+			codec_product_info: codec-product-info@2e {
+				reg = <0x2e 0x2>;
+			};
 		};
 
 		pmic_adc: adc@504 {
@@ -138,9 +155,16 @@
 		};
 
 		sc2730_codec: audio-codec@1000 {
-			compatible = "sprd,sc2730-audio-codec";
+			compatible = "unisoc,sc2730-audio-codec",
+				     "sprd,sc2730-audio-codec";
 			reg = <0x1000>;
 			#sound-dai-cells = <1>;
+			nvmem-cells = <&aud_pabst_vcal>, <&neg_cp>,
+				      <&fgu_4p2>, <&codec_product_info>;
+			nvmem-cell-names = "aud_pabst_vcal_efuse",
+					   "neg_cp_efuse",
+					   "fgu_4p2_efuse",
+					   "codec_product_info";
 			status = "disabled";
 		};
 

@@ -42,4 +42,6 @@ config SND_SOC_SPRD_VBC_V4_DSP
 	  Say Y here to add support for DSP-based audio in SoCs such as
 	  UMS9230.
 
+source "sound/soc/sprd/vendor/Kconfig"
+
 endif

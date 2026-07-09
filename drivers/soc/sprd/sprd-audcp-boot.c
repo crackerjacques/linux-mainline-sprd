@@ -8,6 +8,7 @@
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_address.h>
 #include <linux/of_reserved_mem.h>
 #include <linux/platform_device.h>
 #include <linux/pm_domain.h>
@@ -61,6 +62,8 @@ struct audcp_boot {
 	size_t fw_size;
 	void __iomem *smsg_virt;
 	size_t smsg_size;
+	void __iomem *aon_iram_virt;
+	size_t aon_iram_size;
 	u32 boot_vector;
 	u32 dsp_reboot_mode;
 	struct generic_pm_domain genpd;
@@ -93,6 +96,9 @@ static void audcp_boot_start(struct audcp_boot *b)
 {
 	if (b->smsg_virt)
 		memset_io(b->smsg_virt, 0, b->smsg_size);
+	/* mode-0 boots also clear the AUDCP AON IRAM window (vendor parity) */
+	if (!b->dsp_reboot_mode && b->aon_iram_virt)
+		memset_io(b->aon_iram_virt, 0, b->aon_iram_size);
 
 	audcp_set(b, CTRL_RESET_SEL, false);
 	audcp_set(b, CTRL_CORE_RESET, true);
@@ -169,6 +175,7 @@ static int audcp_boot_map_region(struct device *dev, int idx,
 static int audcp_boot_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	struct device_node *np;
 	struct audcp_boot *b;
 	int i, ret;
 
@@ -204,6 +211,18 @@ static int audcp_boot_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, ret, "no firmware memory-region\n");
 
 	audcp_boot_map_region(dev, 1, &b->smsg_virt, NULL, &b->smsg_size);
+
+	np = of_parse_phandle(dev->of_node, "sprd,audcp-aon-iram", 0);
+	if (np) {
+		struct resource res;
+
+		if (!of_address_to_resource(np, 0, &res)) {
+			b->aon_iram_virt = devm_ioremap_wc(dev, res.start,
+							   resource_size(&res));
+			b->aon_iram_size = resource_size(&res);
+		}
+		of_node_put(np);
+	}
 
 	ret = audcp_boot_load_firmware(b);
 	if (ret)

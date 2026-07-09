@@ -10,6 +10,7 @@
 #include <linux/of.h>
 #include <linux/of_reserved_mem.h>
 #include <linux/platform_device.h>
+#include <linux/pm_domain.h>
 #include <linux/regmap.h>
 
 #define AGDSP_FIRMWARE_NAME		"sprd/ums512-agdsp.bin"
@@ -30,6 +31,7 @@ enum audcp_ctrl {
 	CTRL_SYS_STATUS = CTRL_BOOT_MAX,
 	CTRL_CORE_STATUS,
 	CTRL_SLEEP_STATUS,
+	CTRL_ACCESS_ENABLE,
 	CTRL_MAX,
 };
 
@@ -46,6 +48,7 @@ static const char * const audcp_ctrl_name[CTRL_MAX] = {
 	[CTRL_SYS_STATUS] = "sysstatus",
 	[CTRL_CORE_STATUS] = "corestatus",
 	[CTRL_SLEEP_STATUS] = "sleepstatus",
+	[CTRL_ACCESS_ENABLE] = "accessenable",
 };
 
 struct audcp_boot {
@@ -60,6 +63,7 @@ struct audcp_boot {
 	size_t smsg_size;
 	u32 boot_vector;
 	u32 dsp_reboot_mode;
+	struct generic_pm_domain genpd;
 };
 
 static size_t audcp_firmware_size(const struct firmware *fw)
@@ -206,12 +210,37 @@ static int audcp_boot_probe(struct platform_device *pdev)
 		return ret;
 
 	/*
-	 * No external power domain: the boot sequence below drives the
-	 * AUDCP power/reset controls directly through the PMU/AON regmaps,
-	 * exactly like the vendor sprd_audcp_boot driver. Runtime wake
-	 * voting is handled by agdsp-access afterwards.
+	 * The boot sequence drives the AUDCP power/reset controls directly
+	 * through the PMU/AON regmaps, exactly like the vendor
+	 * sprd_audcp_boot driver.
 	 */
 	audcp_boot_start(b);
+
+	/*
+	 * Everything in AGCP address space (audcpahb/audcpapb clock gates,
+	 * the AGCP DMA controller, VBC, MCDT, the digital codec) hangs the
+	 * bus when touched before the DSP is up and AP access is granted.
+	 * Mainline consumers (clk framework, sprd-dma) cannot take the
+	 * vendor agdsp-access votes, so expose an always-on power domain:
+	 * consumers gain both probe ordering (genpd attach defers them
+	 * until this driver has booted the DSP) and a permanently-set
+	 * AP-access-enable bit.
+	 */
+	if (b->map[CTRL_ACCESS_ENABLE])
+		audcp_set(b, CTRL_ACCESS_ENABLE, true);
+
+	b->genpd.name = dev_name(dev);
+	b->genpd.flags = GENPD_FLAG_ALWAYS_ON;
+	ret = pm_genpd_init(&b->genpd, NULL, false);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to init power domain\n");
+
+	ret = of_genpd_add_provider_simple(dev->of_node, &b->genpd);
+	if (ret) {
+		pm_genpd_remove(&b->genpd);
+		return dev_err_probe(dev, ret, "failed to add genpd provider\n");
+	}
+
 	platform_set_drvdata(pdev, b);
 
 	dev_info(dev, "audio DSP booted (fw@%pa, vector=%#x)\n",

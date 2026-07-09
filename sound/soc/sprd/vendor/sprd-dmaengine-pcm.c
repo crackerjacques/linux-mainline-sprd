@@ -147,15 +147,19 @@ static const struct snd_pcm_hardware sprd_pcm_hardware_v1 = {
 	.formats = SPRD_SNDRV_PCM_FMTBIT,
 	/* 16bits, stereo-2-channels */
 	.period_bytes_min = VBC_FIFO_FRAME_NUM * 4,
-	/* non limit */
-	/* test haps */
-	.period_bytes_max = DEEPBUFFER_PLAYBACK_BUFFER_BYTES_MAX,
+	/*
+	 * The vendor code advertised DEEPBUFFER_PLAYBACK_BUFFER_BYTES_MAX
+	 * (228K) here, but the DMA buffer preallocated from audio-mem is
+	 * only AUDIO_BUFFER_BYTES_MAX (128K) and hw_params never
+	 * reallocates. Modern ALSA memsets the full dma_bytes at hw_params
+	 * time, so an oversized request runs off the mapping and panics
+	 * (seen with speaker-test). Advertise only what is really there.
+	 */
+	.period_bytes_max = AUDIO_BUFFER_BYTES_MAX / 2,
 	.periods_min = 1,
 	/* non limit */
-	/* test haps */
 	.periods_max = PAGE_SIZE / DMA_LINKLIST_CFG_NODE_SIZE,
-	/* test haps */
-	.buffer_bytes_max = DEEPBUFFER_PLAYBACK_BUFFER_BYTES_MAX,
+	.buffer_bytes_max = AUDIO_BUFFER_BYTES_MAX,
 };
 
 static const struct snd_pcm_hardware sprd_i2s_pcm_hardware = {
@@ -896,6 +900,17 @@ static int sprd_pcm_config_dma(struct snd_pcm_substream *substream,
 	struct tdm_config *tdmconf = NULL;
 	struct scatterlist *sg = NULL;
 	int p_wakeup = !(params->flags & SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP);
+
+	/*
+	 * runtime->dma_bytes is set to totsize below without reallocating:
+	 * never let a request exceed the preallocated audio-mem buffer, or
+	 * the ALSA core's hw_params memset runs off the mapping.
+	 */
+	if (totsize > substream->dma_buffer.bytes) {
+		pr_err("%s: buffer request %zu exceeds preallocation %zu\n",
+		       __func__, totsize, substream->dma_buffer.bytes);
+		return -EINVAL;
+	}
 
 	if (be_rtd && snd_soc_rtd_to_cpu(be_rtd, 0)->id == AGCP_IIS0_TX)
 		dma_data = snd_soc_dai_get_dma_data(snd_soc_rtd_to_cpu(be_rtd, 0), substream);

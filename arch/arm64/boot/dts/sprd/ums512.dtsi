@@ -427,7 +427,13 @@
 
 	audcp_boot: audcp-boot {
 		compatible = "sprd,ums512-audcp-boot";
-		dsp-reboot-mode = <1>;
+		/*
+		 * Stock omits dsp-reboot-mode (= mode 0, "dsp reboot by
+		 * DDR"): the boot vector MUST be written, since we cold-load
+		 * the firmware into DDR ourselves. Mode 1 skips the vector
+		 * write and the DSP never executes the image.
+		 */
+		dsp-reboot-mode = <0>;
 		sysshutdown = <&pmu_apb_regs 0x0060 0x02000000>;
 		coreshutdown = <&pmu_apb_regs 0x005c 0x01000000>;
 		deepsleep = <&pmu_apb_regs 0x00cc 0x00080000>;
@@ -442,6 +448,7 @@
 		bootaddress_sel = <&aon_apb_regs 0x0144 0x00000001>;
 		accessenable = <&aon_apb_regs 0x014c 0x00000020>;
 		memory-region = <&audiodsp_reserved>, <&audio_reserved>;
+		sprd,audcp-aon-iram = <&audcp_iram_reserved>;
 		#power-domain-cells = <0>;
 		status = "okay";
 	};

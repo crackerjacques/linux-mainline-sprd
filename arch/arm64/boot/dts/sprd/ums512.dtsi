@@ -440,7 +440,9 @@
 		bootprotect = <&aon_apb_regs 0x0078 0x0000ffff>;
 		bootvector = <&aon_apb_regs 0x0140 0xffffffff>;
 		bootaddress_sel = <&aon_apb_regs 0x0144 0x00000001>;
+		accessenable = <&aon_apb_regs 0x014c 0x00000020>;
 		memory-region = <&audiodsp_reserved>, <&audio_reserved>;
+		#power-domain-cells = <0>;
 		status = "okay";
 	};
 
@@ -1116,6 +1118,7 @@
 				reg = <0 0x33480000 0 0x1000>;
 				sprd,syscon-agcp-ahb = <&audcp_ahb_regs>;
 				sprd,vbc-phy-offset = <0x32000000>;
+				power-domains = <&audcp_boot>;
 				/* iis pin map */
 				pinctrl-names =
 				"vbc_iis3_0", "vbc_iism0_0",
@@ -1141,6 +1144,7 @@
 					     "unisoc,sharkl5pro-mcdt";
 				reg = <0 0x33490000 0 0x170>;
 				interrupts = <GIC_SPI 182 IRQ_TYPE_LEVEL_HIGH>;
+				power-domains = <&audcp_boot>;
 				sprd,ap-addr-offset = <0x32000000>;
 				sprd,syscon-agcp-ahb = <&audcp_ahb_regs>;
 			};
@@ -1150,6 +1154,7 @@
 					     "sprd,sc9860-dma";
 				reg = <0 0x33580000 0 0x4000>;
 				interrupts = <GIC_SPI 180 IRQ_TYPE_LEVEL_HIGH>;
+				power-domains = <&audcp_boot>;
 				#dma-cells = <1>;
 				dma-channels = <32>;
 				clock-names = "enable", "ashb_eb";
@@ -1160,6 +1165,7 @@
 			sprd_audio_codec_dig: audio-codec@33750000 {
 				compatible = "unisoc,audio-codec-dig-agcp";
 				reg = <0 0x33750000 0 0x1000>;
+				power-domains = <&audcp_boot>;
 				sprd,syscon-agcp-ahb = <&audcp_ahb_regs>;
 			};
 

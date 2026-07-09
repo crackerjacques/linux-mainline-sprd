@@ -203,14 +203,13 @@ static int agdsp_access_initialize(struct platform_device *pdev,
 
 	spin_lock_init(&g_agdsp_access->spin_lock);
 
-	if (g_agdsp_access->auto_agcp_access == 0) {
-		pr_dbg("agdsp access init, ready.\n");
-		if (!dsp_ac->auto_agcp_access) {
-			regmap_update_bits(dsp_ac->agcp_ahb,
-				dsp_ac->ap_access_ena_reg,
-				dsp_ac->ap_access_ena_mask, 0);
-		}
-	}
+	/*
+	 * Deviation from vendor: never clear the AP-access-enable bit, at
+	 * init or on last disable. sprd-audcp-boot keeps it permanently set
+	 * because mainline consumers of AGCP address space (audcpahb clock
+	 * gates, sprd-dma) cannot take agdsp-access votes; dropping the bit
+	 * would hang the bus on their next register access.
+	 */
 	dsp_ac->ready = true;
 	return 0;
 error:
@@ -441,7 +440,6 @@ EXPORT_SYMBOL(agdsp_access_enable);
 
 int agdsp_access_disable(void)
 {
-	int ret = 0;
 	struct agdsp_access *dsp_ac = g_agdsp_access;
 
 	pr_dbg("%s entry\n", __func__);
@@ -457,15 +455,7 @@ int agdsp_access_disable(void)
 		AGCP_WRITEL(AGCP_READL(&dsp_ac->state->ap_enable_cnt) - 1,
 			&dsp_ac->state->ap_enable_cnt);
 	}
-	if (!dsp_ac->auto_agcp_access) {
-		if ((AGCP_READL(&dsp_ac->state->ap_enable_cnt) == 0)) {
-			ret = regmap_update_bits(dsp_ac->agcp_ahb,
-				dsp_ac->ap_access_ena_reg,
-				dsp_ac->ap_access_ena_mask, 0);
-			pr_dbg("%s,update register AUDACCESS_APB_AGCP_CTRL, ret=%d\n",
-				__func__, ret);
-		}
-	}
+	/* see agdsp_access_initialize(): the access bit is left set */
 
 	spin_unlock(&dsp_ac->spin_lock);
 

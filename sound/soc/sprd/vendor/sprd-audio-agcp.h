@@ -126,7 +126,18 @@ static inline int arch_audio_iis_to_audio_top_enable(
 	u32 val;
 	int ret;
 
-	agcp_ahb_gpr_null_check();
+	/*
+	 * Honour the null-check (the _v1/_v2 variants below already do). The
+	 * agcp-ahb regmap is set from sprd,syscon-agcp-ahb at vbc/codec probe;
+	 * if an alsactl restore writes ag_iisN_ext_sel before that probe has
+	 * run, g_agcp_ahb_gpr is still NULL and the reg write NULL-derefs
+	 * (kernel panic via vbc_put_ag_iis_ext_sel). Bail gracefully instead.
+	 */
+	ret = agcp_ahb_gpr_null_check();
+	if (ret) {
+		pr_err("%s agcp_ahb_gpr_null_check failed!", __func__);
+		return -1;
+	}
 
 	switch (iis) {
 	case AG_IIS0:

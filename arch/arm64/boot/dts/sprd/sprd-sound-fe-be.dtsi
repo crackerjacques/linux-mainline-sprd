@@ -1130,7 +1130,16 @@
 	sprd_pcm_iis: sprd-pcm-iis {
 		compatible = "unisoc,sharkl5-pcm-platform";
 		#sound-dai-cells = <0>;
-		dmas = <&ap_dma 5 &ap_dma 6>;
+		/*
+		 * The sprd-dma cell is the hardware request UID (sprd_dma_filter_fn
+		 * -> schan->dev_id). The vendor DT used 5/6 but the vendor pcm
+		 * overrode it via the now-removed dma_slave_config.slave_id with
+		 * the real UIDs DMA_REQ_IIS0_TX=4 / DMA_REQ_IIS0_RX=3. Mainline has
+		 * no slave_id override, so the cell itself must carry 4/3 or the
+		 * channel arms on the wrong request line and the i2s never triggers
+		 * the DMA (ap_dma completes nothing -> underrun/-EIO).
+		 */
+		dmas = <&ap_dma 4 &ap_dma 3>;
 		dma-names = "iis0_tx", "iis0_rx";
 		sprd,dma-2stage-usecase = <2>;
 		sprd,node-count-2stage-level-1 = <1>;

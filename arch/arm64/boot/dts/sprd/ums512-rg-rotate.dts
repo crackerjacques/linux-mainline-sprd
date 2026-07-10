@@ -217,6 +217,8 @@
 	sprd-audio-card,routing =
 		"Ext Spk", "HP Pin",
 		"Ext Spk1", "HP Pin";
+	sprd,spk-ext-pa-info = <0 0 4 0>;
+	sprd,spk-ext-pa-gpio = <&ap_gpio 9 1>;
 };
 
 &pinctrl {

@@ -20,6 +20,8 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
+#include <linux/hrtimer.h>
+#include <linux/math64.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -88,6 +90,7 @@ static inline u32 sprd_pcm_dma_get_addr(struct dma_chan *dma_chn,
 
 static int sprd_pcm_preallocate_dma_ddr32_buffer(struct snd_pcm *pcm,
 						int stream);
+static enum hrtimer_restart sprd_pcm_period_hrtimer(struct hrtimer *t);
 
 #ifndef DMA_LINKLIST_CFG_NODE_SIZE
 #define DMA_LINKLIST_CFG_NODE_SIZE  (sizeof(struct sprd_dma_cfg))
@@ -120,6 +123,21 @@ struct sprd_runtime_data {
 	int dma_pos_wrapped[2];
 	int interleaved;
 	int cb_called;
+	/*
+	 * On this port the audcp->AP DMA-completion interrupt is never
+	 * forwarded to the GIC (that forwarding is owned by the AGDSP
+	 * firmware, which we replaced): GIC SPI 180 stays un-pending even
+	 * though the DMA latches its interrupt, so sprd_pcm_dma_buf_done
+	 * never runs and ALSA gets no period wakeups. The DMA free-runs at
+	 * exact real time and .pointer reads the live DMA address, so on the
+	 * VBC/agcp path we drive snd_pcm_period_elapsed from a period-paced
+	 * hrtimer instead. (I2S/TDM/IIS0 keep their byte burst path.)
+	 */
+	struct hrtimer period_timer;
+	struct snd_pcm_substream *substream;
+	ktime_t period_ktime;
+	bool use_period_timer;
+	bool timer_running;
 #ifdef CONFIG_SND_VERBOSE_PROCFS
 	struct snd_info_entry *proc_info_entry;
 #endif
@@ -409,6 +427,15 @@ static int sprd_pcm_open(struct snd_pcm_substream *substream)
 	if (!rtd)
 		goto out;
 	runtime->private_data = rtd;
+	/*
+	 * The VBC/agcp path (frag_frames set) is the one whose DMA interrupt
+	 * never reaches the AP; give it the period hrtimer. Always init so the
+	 * cancel in close is unconditionally safe.
+	 */
+	rtd->substream = substream;
+	rtd->use_period_timer = (frag_frames != 0);
+	hrtimer_setup(&rtd->period_timer, sprd_pcm_period_hrtimer,
+		      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	mutex_lock(&pm_dma->pm_mtx_cnt);
 	/* dma related need to access auio dsp sys */
 	if (!is_no_pcm_dai(snd_soc_rtd_to_cpu(srtd, 0)->id)) {
@@ -616,6 +643,10 @@ static int sprd_pcm_close(struct snd_pcm_substream *substream)
 	if (!rtd)
 		return -EINVAL;
 
+	/* process context: safe to block until the callback has finished */
+	rtd->timer_running = false;
+	hrtimer_cancel(&rtd->period_timer);
+
 	mutex_lock(&pm_dma->pm_mtx_cnt);
 	if (!sprd_is_normal_playback(snd_soc_rtd_to_cpu(srtd, 0)->id,
 		substream->stream)) {
@@ -748,6 +779,26 @@ irq_ready:
 	rtd->int_pos_update[1] = 0;
 irq_fast:
 	snd_pcm_period_elapsed(dma_cb_data->substream);
+}
+
+/*
+ * Stand-in for the missing DMA-completion interrupt (see the comment on
+ * struct sprd_runtime_data). Fires once per period; the DMA runs cyclic and
+ * .pointer reports the exact hardware position, so period_elapsed only has to
+ * poke ALSA to re-read hw_ptr and wake the writer on time.
+ */
+static enum hrtimer_restart sprd_pcm_period_hrtimer(struct hrtimer *t)
+{
+	struct sprd_runtime_data *rtd =
+		container_of(t, struct sprd_runtime_data, period_timer);
+
+	if (!READ_ONCE(rtd->timer_running))
+		return HRTIMER_NORESTART;
+
+	hrtimer_forward_now(t, rtd->period_ktime);
+	snd_pcm_period_elapsed(rtd->substream);
+
+	return HRTIMER_RESTART;
 }
 
 static int sprd_pcm_get_dma_type(struct dma_chan *dma_chn)
@@ -1373,10 +1424,29 @@ static int sprd_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 
 		pr_info("pcm Start\n");
 		normal_dma_protect_spin_unlock(substream);
+		if (rtd->use_period_timer) {
+			struct snd_pcm_runtime *runtime = substream->runtime;
+
+			rtd->period_ktime = ns_to_ktime(div_u64(
+				(u64)runtime->period_size * NSEC_PER_SEC,
+				runtime->rate));
+			WRITE_ONCE(rtd->timer_running, true);
+			hrtimer_start(&rtd->period_timer, rtd->period_ktime,
+				      HRTIMER_MODE_REL);
+		}
 		break;
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
+		/*
+		 * trigger may run atomically, so don't block here: clear the
+		 * re-arm flag (the callback returns NORESTART) and best-effort
+		 * cancel. close() does the definitive blocking hrtimer_cancel.
+		 */
+		if (rtd->use_period_timer) {
+			WRITE_ONCE(rtd->timer_running, false);
+			hrtimer_try_to_cancel(&rtd->period_timer);
+		}
 		normal_dma_protect_spin_lock(substream);
 		pr_info("pcm Stop\n");
 		if (rtd->dma_chn[0] == NULL) {

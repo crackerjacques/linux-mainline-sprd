@@ -47,6 +47,7 @@
 #endif
 #include "i2s.h"
 #include "sprd-i2s.h"
+#include "agdsp_access.h"
 
 /* register offset */
 #define IIS_TXD			(0x0000)
@@ -721,16 +722,43 @@ static void i2s_dma_ctrl(struct i2s_priv *i2s, int enable)
 	}
 }
 
+/*
+ * IIS0 hw_port 0 is muxed between the internal audio-top (DSP) and this
+ * external AP i2s controller by BIT_AG_IIS0_EXT_SEL in the audcp-domain
+ * REG_AGCP_AHB_EXT_ACC_AG_SEL. Two hazards there:
+ *  - the bit is volatile: it resets to 0 (internal) whenever the audcp
+ *    domain power-cycles, so a one-shot poke at codec probe never stuck
+ *    (and faulted at early boot). We re-apply it here per stream instead.
+ *  - the register lives behind the audcp power domain. agdsp_access_enable()
+ *    only flips the AP-access-enable bit; it does NOT guarantee the audcp
+ *    core is powered, so writing while the core is in deep-sleep faults.
+ *    Gate the write on agdsp_can_access() (which reads the PMU power/sleep
+ *    status) and degrade to a warning rather than panicking.
+ */
+static void i2s_ag_iis0_ext_sel(struct i2s_priv *i2s, int enable)
+{
+	if (i2s->config.hw_port != 0)
+		return;
+
+	if (agdsp_access_enable() != 0) {
+		pr_warn("I2S: agdsp access unavailable, AG_IIS0 ext-sel=%d skipped\n",
+			enable);
+		return;
+	}
+	if (agdsp_can_access())
+		arch_audio_iis_to_audio_top_enable(AG_IIS0, enable);
+	else
+		pr_warn("I2S: audcp not powered, AG_IIS0 ext-sel=%d skipped\n",
+			enable);
+	agdsp_access_disable();
+}
+
 static int i2s_close(struct i2s_priv *i2s)
 {
 	sp_asoc_pr_dbg("%s %d\n", __func__, atomic_read(&i2s->open_cnt));
 	if (atomic_dec_and_test(&i2s->open_cnt)) {
-		/*
-		 * Release the AG IIS0 mux back to the audio-top. See the open
-		 * path for why this is owned here rather than at codec probe.
-		 */
-		if (i2s->config.hw_port == 0)
-			arch_audio_iis_to_audio_top_enable(AG_IIS0, 0);
+		/* release the AG IIS0 mux back to the audio-top */
+		i2s_ag_iis0_ext_sel(i2s, 0);
 		i2s_soft_reset(i2s);
 		i2s_global_disable(i2s);
 		if (!IS_ERR(i2s->i2s_clk)) {
@@ -757,19 +785,8 @@ static int i2s_open(struct i2s_priv *i2s)
 			return ret;
 		}
 		i2s_global_enable(i2s);
-		/*
-		 * IIS0 hw_port 0 is muxed between the internal audio-top (DSP)
-		 * and this external AP i2s controller by BIT_AG_IIS0_EXT_SEL in
-		 * the audcp-domain REG_AGCP_AHB_EXT_ACC_AG_SEL. That bit is
-		 * volatile: it resets to 0 (internal) whenever the audcp domain
-		 * power-cycles, so a one-shot poke at codec probe never sticks
-		 * (and faulted during early boot). Own it here at DAI startup --
-		 * the natural owner, since EXT_SEL=1 means "AP drives IIS0" --
-		 * where the agdsp is guaranteed accessible and it re-applies
-		 * every stream.
-		 */
-		if (i2s->config.hw_port == 0)
-			arch_audio_iis_to_audio_top_enable(AG_IIS0, 1);
+		/* route IIS0 to this AP controller (see i2s_ag_iis0_ext_sel) */
+		i2s_ag_iis0_ext_sel(i2s, 1);
 		i2s_soft_reset(i2s);
 		i2s_dma_ctrl(i2s, 0);
 		ret = i2s_config_apply(i2s);

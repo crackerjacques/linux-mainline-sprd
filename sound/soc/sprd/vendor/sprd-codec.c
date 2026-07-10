@@ -49,6 +49,7 @@
 #include "sprd-asoc-common.h"
 #include "sprd-codec.h"
 #include "sprd-headset.h"
+#include "agdsp_access.h"
 
 #define SOC_REG(r) ((unsigned short)(r))
 #define FUN_REG(f) ((unsigned short)(-((f) + 1)))
@@ -3292,6 +3293,20 @@ static unsigned int sprd_codec_read(struct snd_soc_component *codec,
 			pr_err("%s, agdsp_access_enable failed!\n", __func__);
 			return ret;
 		}
+		/*
+		 * agdsp_access_enable() takes its fast path (skips the wake +
+		 * PMU power-up poll) when ap_enable_cnt is already non-zero, so
+		 * it can return success while the audcp domain is actually in
+		 * deep-sleep -- e.g. an idle amixer read of a DP control. The
+		 * readl below then async-aborts (fatal SError). Confirm the core
+		 * is genuinely powered before touching the digital reg window.
+		 */
+		if (!agdsp_can_access()) {
+			pr_warn_ratelimited("%s: audcp not accessible, DP reg 0x%x read as 0\n",
+					    __func__, reg);
+			agdsp_access_disable();
+			return 0;
+		}
 		codec_digital_reg_enable(codec);
 		ret = readl_relaxed((void __iomem *)(reg -
 			CODEC_DP_BASE + sprd_codec_dp_base));
@@ -3329,6 +3344,13 @@ static int sprd_codec_write(struct snd_soc_component *codec, unsigned int reg,
 		if (ret) {
 			pr_err("%s, agdsp_access_enable failed!\n", __func__);
 			return ret;
+		}
+		/* see sprd_codec_read(): don't touch DP regs if audcp is asleep */
+		if (!agdsp_can_access()) {
+			pr_warn_ratelimited("%s: audcp not accessible, DP reg 0x%x write dropped\n",
+					    __func__, reg);
+			agdsp_access_disable();
+			return 0;
 		}
 		codec_digital_reg_enable(codec);
 		sp_asoc_pr_reg("D[0x%04x] R:[0x%08x]\n",

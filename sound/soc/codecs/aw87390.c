@@ -15,6 +15,8 @@
 #include "aw88395/aw88395_data_type.h"
 #include "aw88395/aw88395_device.h"
 
+static struct aw87390 *rgds_amp;
+
 static const struct regmap_config aw87390_remap_config = {
 	.val_bits = 8,
 	.reg_bits = 8,
@@ -314,57 +316,63 @@ static int aw87390_drv_event(struct snd_soc_dapm_widget *w,
 	return ret;
 }
 
-static int aw87391_rgds_drv_event(struct snd_soc_dapm_widget *w,
-				struct snd_kcontrol *kcontrol, int event)
+static int aw87391_rgds_power(struct aw87390 *aw87390, bool on)
 {
-	struct snd_soc_component *component = snd_soc_dapm_to_component(w->dapm);
-	struct aw87390 *aw87390 = snd_soc_component_get_drvdata(component);
-	struct aw_device *aw_dev = aw87390->aw_pa;
+	struct aw_device *aw_dev;
+	int ret;
 
-	switch (event) {
-	case SND_SOC_DAPM_PRE_PMU:
+	if (!aw87390 || !aw87390->aw_pa)
+		return -ENODEV;
+
+	aw_dev = aw87390->aw_pa;
+
+	mutex_lock(&aw87390->lock);
+
+	if (on) {
 		if (!IS_ERR(aw87390->vdd_reg)) {
-			if (regulator_enable(aw87390->vdd_reg))
-				dev_warn(aw_dev->dev, "Failed to enable vdd\n");
-	}
-		break;
-	case SND_SOC_DAPM_POST_PMU:
-		regmap_write(aw_dev->regmap, AW87391_SYSCTRL_REG,
-			     AW87391_REG_VER_SEL_LOW | AW87391_REG_EN_ADAP |
-			     AW87391_REG_EN_2X | AW87391_EN_SPK |
-			     AW87391_EN_PA | AW87391_REG_EN_CP |
-			     AW87391_EN_SW);
-		break;
-	case SND_SOC_DAPM_PRE_PMD:
-		regmap_write(aw_dev->regmap, AW87390_SYSCTRL_REG,
-			     AW87390_POWER_DOWN_VALUE);
-		break;
-	case SND_SOC_DAPM_POST_PMD:
+			ret = regulator_enable(aw87390->vdd_reg);
+			if (ret)
+				dev_warn(aw_dev->dev, "Failed to enable vdd: %d\n", ret);
+		}
+
+		ret = regmap_write(aw_dev->regmap, AW87391_SYSCTRL_REG,
+				   AW87391_REG_VER_SEL_LOW | AW87391_REG_EN_ADAP |
+				   AW87391_REG_EN_2X | AW87391_EN_SPK |
+				   AW87391_EN_PA | AW87391_REG_EN_CP |
+				   AW87391_EN_SW);
+	} else {
+		ret = regmap_write(aw_dev->regmap, AW87390_SYSCTRL_REG,
+				   AW87390_POWER_DOWN_VALUE);
+
 		if (!IS_ERR(aw87390->vdd_reg)) {
-			if (regulator_disable(aw87390->vdd_reg))
-				dev_warn(aw_dev->dev, "Failed to disable vdd\n");
-	}
-		break;
-	default:
-		dev_err(aw_dev->dev, "%s: invalid event %d\n", __func__, event);
-		return -EINVAL;
+			int disable_ret = regulator_disable(aw87390->vdd_reg);
+
+			if (disable_ret)
+				dev_warn(aw_dev->dev, "Failed to disable vdd: %d\n",
+					 disable_ret);
+			if (!ret)
+				ret = disable_ret;
+		}
 	}
 
-	return 0;
+	mutex_unlock(&aw87390->lock);
+
+	return ret;
 }
+
+int anbernic_rgds_amp_enable(int on)
+{
+	if (!rgds_amp)
+		return -ENODEV;
+
+	return aw87391_rgds_power(rgds_amp, !!on);
+}
+EXPORT_SYMBOL_GPL(anbernic_rgds_amp_enable);
 
 static const struct snd_soc_dapm_widget aw87390_dapm_widgets[] = {
 	SND_SOC_DAPM_INPUT("IN"),
 	SND_SOC_DAPM_PGA_E("SPK PA", SND_SOC_NOPM, 0, 0, NULL, 0, aw87390_drv_event,
 			       SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
-	SND_SOC_DAPM_OUTPUT("OUT"),
-};
-
-static const struct snd_soc_dapm_widget aw87391_rgds_dapm_widgets[] = {
-	SND_SOC_DAPM_INPUT("IN"),
-	SND_SOC_DAPM_PGA_E("SPK PA", SND_SOC_NOPM, 0, 0, NULL, 0, aw87391_rgds_drv_event,
-			   SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMU |
-			   SND_SOC_DAPM_PRE_PMD | SND_SOC_DAPM_POST_PMD),
 	SND_SOC_DAPM_OUTPUT("OUT"),
 };
 
@@ -441,23 +449,14 @@ static void aw87391_rgds_codec_init(struct aw87390 *aw87390)
 		     AW87391_REG_VER_SEL_LOW | AW87391_REG_EN_ADAP |
 		     AW87391_REG_EN_2X | AW87391_EN_SPK | AW87391_EN_PA |
 		     AW87391_REG_EN_CP | AW87391_EN_SW);
-	regmap_write(aw_dev->regmap, AW87391_PAG_REG, AW87391_GAIN_15DB);
-}
-
-static int aw87391_rgds_codec_probe(struct snd_soc_component *component)
-{
-	struct aw87390 *aw87390 = snd_soc_component_get_drvdata(component);
-
-	aw87390->vdd_reg = devm_regulator_get_optional(aw87390->aw_pa->dev,
-						       "vdd");
-	if (IS_ERR(aw87390->vdd_reg) && PTR_ERR(aw87390->vdd_reg) != -ENODEV)
-		return dev_err_probe(aw87390->aw_pa->dev,
-				     PTR_ERR(aw87390->vdd_reg),
-				     "Could not get vdd regulator\n");
-
-	aw87391_rgds_codec_init(aw87390);
-
-	return 0;
+	/*
+	 * RG-rotate: stock leaves the PA at 15 dB, but with the codec HP path
+	 * driving it that is too quiet on this handheld. Bump to 21 dB (max is
+	 * AW87391_GAIN_24DB if more is needed and it stays clean). This is the
+	 * live gain: the amp keeps VBAT power (no vdd-supply in DT), so this
+	 * probe-time write persists across playback power cycles.
+	 */
+	regmap_write(aw_dev->regmap, AW87391_PAG_REG, AW87391_GAIN_21DB);
 }
 
 static const struct snd_soc_component_driver soc_codec_dev_aw87390 = {
@@ -468,14 +467,6 @@ static const struct snd_soc_component_driver soc_codec_dev_aw87390 = {
 	.num_dapm_routes = ARRAY_SIZE(aw87390_dapm_routes),
 	.controls = aw87390_controls,
 	.num_controls = ARRAY_SIZE(aw87390_controls),
-};
-
-static const struct snd_soc_component_driver soc_codec_dev_anbernic_rgds = {
-	.probe = aw87391_rgds_codec_probe,
-	.dapm_widgets = aw87391_rgds_dapm_widgets,
-	.num_dapm_widgets = ARRAY_SIZE(aw87391_rgds_dapm_widgets),
-	.dapm_routes = aw87390_dapm_routes,
-	.num_dapm_routes = ARRAY_SIZE(aw87390_dapm_routes),
 };
 
 static void aw87390_parse_channel_dt(struct aw87390 *aw87390)
@@ -541,7 +532,6 @@ static int aw87390_init(struct aw87390 *aw87390, struct i2c_client *i2c, struct 
 static int aw87390_i2c_probe(struct i2c_client *i2c)
 {
 	struct aw87390 *aw87390;
-	const struct snd_soc_component_driver *priv;
 	int ret;
 
 	if (!i2c_check_functionality(i2c->adapter, I2C_FUNC_I2C))
@@ -575,11 +565,26 @@ static int aw87390_i2c_probe(struct i2c_client *i2c)
 					&soc_codec_dev_aw87390, NULL, 0);
 		break;
 	case AW87391_CHIP_ID:
-		priv = of_device_get_match_data(&i2c->dev);
-		if (!priv)
-			return dev_err_probe(&i2c->dev, -EINVAL,
-					     "aw87391 not currently supported\n");
-		ret = devm_snd_soc_register_component(&i2c->dev, priv, NULL, 0);
+		/*
+		 * On the Anbernic RG-DS the amp hangs off the sound card's
+		 * speaker hook (anbernic_rgds_amp_enable()) rather than being
+		 * bound to the card as a component, so set it up here instead
+		 * of in a component probe that would never run.
+		 */
+		aw87390->vdd_reg = devm_regulator_get_optional(&i2c->dev, "vdd");
+		if (IS_ERR(aw87390->vdd_reg) && PTR_ERR(aw87390->vdd_reg) != -ENODEV)
+			return dev_err_probe(&i2c->dev, PTR_ERR(aw87390->vdd_reg),
+					     "Could not get vdd regulator\n");
+
+		aw87391_rgds_codec_init(aw87390);
+
+		/* Leave the amp powered down until the speaker hook enables it. */
+		ret = regmap_write(aw87390->regmap, AW87390_SYSCTRL_REG,
+				   AW87390_POWER_DOWN_VALUE);
+		if (ret)
+			return ret;
+
+		rgds_amp = aw87390;
 		break;
 	default:
 		return -ENXIO;
@@ -591,9 +596,15 @@ static int aw87390_i2c_probe(struct i2c_client *i2c)
 	return ret;
 }
 
+static void aw87390_i2c_remove(struct i2c_client *i2c)
+{
+	if (rgds_amp == i2c_get_clientdata(i2c))
+		rgds_amp = NULL;
+}
+
 static const struct of_device_id aw87390_of_match[] = {
 	{ .compatible = "awinic,aw87390" },
-	{ .compatible = "anbernic,rgds-amp", .data = &soc_codec_dev_anbernic_rgds },
+	{ .compatible = "anbernic,rgds-amp" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, aw87390_of_match);
@@ -611,6 +622,7 @@ static struct i2c_driver aw87390_i2c_driver = {
 		.of_match_table = of_match_ptr(aw87390_of_match),
 	},
 	.probe = aw87390_i2c_probe,
+	.remove = aw87390_i2c_remove,
 	.id_table = aw87390_i2c_id,
 };
 module_i2c_driver(aw87390_i2c_driver);

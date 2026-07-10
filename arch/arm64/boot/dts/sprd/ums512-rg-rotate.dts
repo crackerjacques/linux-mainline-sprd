@@ -493,3 +493,40 @@
 		sound-name-prefix = "Speaker Amp";
 	};
 };
+
+/*
+ * AP-side i2s0 audio path (all-i2s test card). Brought up to extend the
+ * vendor audio port beyond the working VBC/agcp card. Rides ap_dma (its
+ * own AP-owned DMA + GIC_SPI 24), so it should get native DMA period
+ * interrupts rather than the hrtimer workaround the VBC path needs.
+ *
+ * i2s0 is configured for the stock PCM/BT-SCO mode (bus_type=1, 8 kHz,
+ * short frame). Adjust sprd,config_type/bus_type for raw i2s use.
+ */
+&ap_dma {
+	status = "okay";
+};
+
+&i2s0 {
+	sprd,config_type = "pcm";
+	sprd,slave_timeout = <0xF11>;
+	sprd,fs = <8000>;
+	sprd,bus_type = <1>;
+	sprd,rtx_mode = <3>;
+	sprd,byte_per_chan = <1>;
+	sprd,slave_mode = <0>;
+	sprd,lsb = <0>;
+	sprd,lrck = <0>;
+	sprd,low_for_left = <1>;
+	sprd,clk_inv = <0>;
+	sprd,pcm_short_frame = <1>;
+	sprd,pcm_slot = <0x1>;
+	sprd,pcm_cycle = <1>;
+	sprd,tx_watermark = <12>;
+	sprd,rx_watermark = <20>;
+	status = "okay";
+};
+
+&sound_sprd_ap_alliis {
+	status = "okay";
+};

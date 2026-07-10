@@ -5340,15 +5340,25 @@ static int vbc_codec_soc_probe(struct snd_soc_component *codec)
 	vbc_proc_init(codec);
 
 	/*
-	 * NB: the AG IIS0 ext-sel route (BIT_AG_IIS0_EXT_SEL in the
-	 * audcp-domain REG_AGCP_AHB_EXT_ACC_AG_SEL) is NOT poked here.
-	 * That register is volatile across audcp power cycles, so a one-shot
-	 * write at probe never stuck -- and it faulted during early boot
-	 * before the agdsp was reliably accessible. Ownership of that mux now
-	 * lives at DAI startup in the AP i2s0 driver (sprd-i2s.c), which is
-	 * the natural owner (EXT_SEL=1 == "AP drives IIS0") and re-applies it
-	 * per stream. See [[audio-i2s0-port]] / the i2s_open() comment.
+	 * Route AG IIS0 to the audio-top (BIT_AG_IIS0_EXT_SEL in the
+	 * audcp-domain REG_AGCP_AHB_EXT_ACC_AG_SEL): the speaker path clocks
+	 * the codec from AG IIS0 and it defaults to disable at boot, so
+	 * without this the speaker is silent (only noise floor).
+	 *
+	 * This was previously dropped when i2s0 owned the mux, but the all-i2s
+	 * card is a separate/optional card -- when it's disabled nobody sets
+	 * the route, so re-own it here. Safe now: arch_audio_iis_to_audio_top_
+	 * enable() honours the agcp-ahb null-check (no NULL-deref) and does its
+	 * own agdsp wake; gate on agdsp_can_access() so an unpowered audcp
+	 * can't fault. The permanent agdsp vote (sprd_codec_probe) keeps the
+	 * core awake, so the bit no longer gets reset across power cycles.
 	 */
+	if (agdsp_access_enable() == 0) {
+		if (agdsp_can_access())
+			arch_audio_iis_to_audio_top_enable(AG_IIS0, 1);
+		agdsp_access_disable();
+	}
+	vbc_codec->ag_iis_ext_sel[AG_IIS0] = 1;
 
 	snd_soc_dapm_ignore_suspend(dapm, "BE_DAI_OFFLOAD_CODEC_P");
 	snd_soc_dapm_ignore_suspend(dapm, "BE_DAI_FM_CODEC_P");

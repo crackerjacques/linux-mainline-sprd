@@ -315,6 +315,12 @@ static const struct soc_enum codec_info_enum =
 	SOC_SINGLE_EXT(xname, xreg, xshift, 1, 0, \
 		snd_soc_dapm_get_volsw, snd_soc_dapm_put_volsw)
 
+/*
+ * RG-rotate known-good HP output level feeding the external AW87391 amp
+ * (raw ANA_CDC7 HP gain field, matches stock's captured value of 4).
+ */
+#define SPRD_RGROTATE_HP_GAIN	4
+
 static const struct snd_kcontrol_new spkl_pga_controls[] = {
 	SOC_SINGLE_EXT_TLV("SPKL Playback Volume", SOC_REG(ANA_CDC8), PA_G_S,
 			   15, 0, sprd_codec_spk_pga_get,
@@ -349,7 +355,7 @@ static const struct snd_kcontrol_new adcr_pga_controls[] = {
 
 static const struct snd_kcontrol_new dac_pga_controls[] = {
 	SPRD_CODEC_PGA_MAX_INVERT("DAC Playback Volume",
-		SOC_REG(ANA_CDC5), DA_IG_S, 2, dac_tlv),
+		SOC_REG(ANA_CDC5), DA_IG_S, 3, dac_tlv),
 };
 
 /* ADCL Mixer */
@@ -1257,6 +1263,22 @@ static int dalr_dc_os_event(struct snd_soc_dapm_widget *w,
 	if (on) {
 		sprd_codec_sdm_init(codec);
 		sprd_dalr_dc_os_set(codec);
+
+		/*
+		 * RG-rotate: this handheld only plays through the codec HP path
+		 * into the external AW87391 amp, and there is no Android audio
+		 * HAL to program the analog gains. The ANA_CDC gain fields come
+		 * up at 0 (full attenuation, -15 dB DAC / muted HP) every time
+		 * the DAC path powers, so seed the known-good levels captured
+		 * from stock here on each power-up. Userspace can still override
+		 * them while a stream is running.
+		 */
+		snd_soc_component_update_bits(codec, SOC_REG(ANA_CDC5),
+			DA_IG(3), DA_IG(3));
+		snd_soc_component_update_bits(codec, SOC_REG(ANA_CDC7),
+			HPL_G(0xf) | HPR_G(0xf),
+			HPL_G(SPRD_RGROTATE_HP_GAIN) |
+			HPR_G(SPRD_RGROTATE_HP_GAIN));
 
 		snd_soc_component_update_bits(codec, SOC_REG(ANA_CDC5),
 			DAL_EN|DAR_EN, DAL_EN|DAR_EN);

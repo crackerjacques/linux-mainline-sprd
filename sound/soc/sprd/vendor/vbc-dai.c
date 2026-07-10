@@ -5340,14 +5340,15 @@ static int vbc_codec_soc_probe(struct snd_soc_component *codec)
 	vbc_proc_init(codec);
 
 	/*
-	 * RG-rotate: the speaker path clocks the codec from AG IIS0, which
-	 * must be routed to the audio top. Stock's HAL set this every boot via
-	 * 'ag_iis0_ext_sel'; with no HAL here it defaults to disable and audio
-	 * is silent until set by hand. Apply the known-good enable once at
-	 * probe (mirrors vbc_put_ag_iis_ext_sel); userspace can still change it.
+	 * NB: the AG IIS0 ext-sel route (BIT_AG_IIS0_EXT_SEL in the
+	 * audcp-domain REG_AGCP_AHB_EXT_ACC_AG_SEL) is NOT poked here.
+	 * That register is volatile across audcp power cycles, so a one-shot
+	 * write at probe never stuck -- and it faulted during early boot
+	 * before the agdsp was reliably accessible. Ownership of that mux now
+	 * lives at DAI startup in the AP i2s0 driver (sprd-i2s.c), which is
+	 * the natural owner (EXT_SEL=1 == "AP drives IIS0") and re-applies it
+	 * per stream. See [[audio-i2s0-port]] / the i2s_open() comment.
 	 */
-	arch_audio_iis_to_audio_top_enable(AG_IIS0, 1);
-	vbc_codec->ag_iis_ext_sel[AG_IIS0] = 1;
 
 	snd_soc_dapm_ignore_suspend(dapm, "BE_DAI_OFFLOAD_CODEC_P");
 	snd_soc_dapm_ignore_suspend(dapm, "BE_DAI_FM_CODEC_P");

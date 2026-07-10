@@ -316,6 +316,7 @@ static int sprd_pcm_open(struct snd_pcm_substream *substream)
 	struct tdm_config *tdmconf;
 	struct snd_pcm *pcm = srtd->pcm;
 	int burst_len = 0;
+	int frag_frames = 0;
 	int hw_chan = 0;
 	int ret;
 	struct audio_pm_dma *pm_dma;
@@ -352,26 +353,51 @@ static int sprd_pcm_open(struct snd_pcm_substream *substream)
 	} else {
 		snd_soc_set_runtime_hwparams(substream,
 			&sprd_pcm_hardware_v1);
-		burst_len = VBC_AUDRCD_FULL_WATERMARK / 2;
+		/*
+		 * The VBC DMA bursts one fragment (VBC_FIFO_FRAME_NUM frames)
+		 * per channel at a time; the burst size in bytes scales with
+		 * the sample format (datawidth), which is not known yet here.
+		 * Constrain in frames instead of bytes so the period is always
+		 * a whole number of fragments regardless of S16/S24 -- a
+		 * byte-based rule that assumed one datawidth let ALSA grant
+		 * half-burst periods, dropping samples at every period edge.
+		 */
+		frag_frames = VBC_FIFO_FRAME_NUM;
 		hw_chan = 2;
 	}
 
 	/*
 	 * For mysterious reasons (and despite what the manual says)
 	 * playback samples are lost if the DMA count is not a multiple
-	 * of the DMA burst size.  Let's add a rule to enforce that.
+	 * of the DMA burst size.  Let's add a rule to enforce that. The
+	 * FIFO-based paths (I2S/TDM/IIS0) know their burst in bytes up
+	 * front; the VBC path only knows it in frames (see above).
 	 */
-	ret = snd_pcm_hw_constraint_step(runtime, 0,
-					 SNDRV_PCM_HW_PARAM_PERIOD_BYTES,
-					 burst_len);
-	if (ret)
-		goto out;
+	if (frag_frames) {
+		ret = snd_pcm_hw_constraint_step(runtime, 0,
+						 SNDRV_PCM_HW_PARAM_PERIOD_SIZE,
+						 frag_frames);
+		if (ret)
+			goto out;
 
-	ret = snd_pcm_hw_constraint_step(runtime, 0,
-					 SNDRV_PCM_HW_PARAM_BUFFER_BYTES,
-					 burst_len);
-	if (ret)
-		goto out;
+		ret = snd_pcm_hw_constraint_step(runtime, 0,
+						 SNDRV_PCM_HW_PARAM_BUFFER_SIZE,
+						 frag_frames);
+		if (ret)
+			goto out;
+	} else {
+		ret = snd_pcm_hw_constraint_step(runtime, 0,
+						 SNDRV_PCM_HW_PARAM_PERIOD_BYTES,
+						 burst_len);
+		if (ret)
+			goto out;
+
+		ret = snd_pcm_hw_constraint_step(runtime, 0,
+						 SNDRV_PCM_HW_PARAM_BUFFER_BYTES,
+						 burst_len);
+		if (ret)
+			goto out;
+	}
 
 	ret = snd_pcm_hw_constraint_integer(runtime,
 					    SNDRV_PCM_HW_PARAM_PERIODS);

@@ -528,5 +528,6 @@
 };
 
 &sound_sprd_ap_alliis {
-	status = "okay";
+	status = "disabled";
+	sprd,syscon-agcp-ahb = <&aon_apb_regs>;
 };

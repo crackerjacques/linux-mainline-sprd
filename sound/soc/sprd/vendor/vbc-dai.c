@@ -5339,6 +5339,16 @@ static int vbc_codec_soc_probe(struct snd_soc_component *codec)
 
 	vbc_proc_init(codec);
 
+	/*
+	 * RG-rotate: the speaker path clocks the codec from AG IIS0, which
+	 * must be routed to the audio top. Stock's HAL set this every boot via
+	 * 'ag_iis0_ext_sel'; with no HAL here it defaults to disable and audio
+	 * is silent until set by hand. Apply the known-good enable once at
+	 * probe (mirrors vbc_put_ag_iis_ext_sel); userspace can still change it.
+	 */
+	arch_audio_iis_to_audio_top_enable(AG_IIS0, 1);
+	vbc_codec->ag_iis_ext_sel[AG_IIS0] = 1;
+
 	snd_soc_dapm_ignore_suspend(dapm, "BE_DAI_OFFLOAD_CODEC_P");
 	snd_soc_dapm_ignore_suspend(dapm, "BE_DAI_FM_CODEC_P");
 	snd_soc_dapm_ignore_suspend(dapm, "BE_DAI_VOICE_CODEC_P");

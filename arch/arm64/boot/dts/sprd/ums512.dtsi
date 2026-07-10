@@ -1318,6 +1318,9 @@
 			sprd,dai_name = "i2s_bt_sco0";
 			sprd,hw_port = <0>;
 			sprd,syscon-ap-apb = <&ap_apb_regs>;
+			/* agcp-ahb holds the AG_IIS0 ext-sel mux; needed to route
+			 * IIS0 to this AP controller when card 0 is disabled. */
+			sprd,syscon-agcp-ahb = <&audcp_ahb_regs>;
 			#sound-dai-cells = <0>;
 			clock-names = "clk_iis0",
 				      "clk_twpll_128m",

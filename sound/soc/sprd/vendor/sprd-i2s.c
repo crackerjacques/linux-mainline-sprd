@@ -1287,6 +1287,29 @@ static int i2s_drv_probe(struct platform_device *pdev)
 			arch_audio_set_ap_apb_gpr(ap_apb_gpr);
 		}
 
+		/*
+		 * The AG_IIS0 ext-sel mux (routing IIS0 to this AP controller)
+		 * lives in the agcp-ahb syscon. That regmap is normally set up
+		 * by the VBC codec/card probe, but the all-i2s card can run with
+		 * card 0 disabled, so acquire it here too if nobody has yet.
+		 * Mirrors sprd-codec: set-offset/clr-offset default 0x100/0x200.
+		 */
+		if (!arch_audio_get_agcp_ahb_gpr()) {
+			struct regmap *agcp_ahb_gpr =
+				syscon_regmap_lookup_by_phandle(node,
+					"sprd,syscon-agcp-ahb");
+			if (IS_ERR(agcp_ahb_gpr)) {
+				pr_warn("i2s: no sprd,syscon-agcp-ahb; AG_IIS0 route unavailable\n");
+			} else {
+				u32 so = 0x100, co = 0x200;
+
+				of_property_read_u32(node, "set-offset", &so);
+				of_property_read_u32(node, "clr-offset", &co);
+				set_agcp_ahb_offset(so, co);
+				arch_audio_set_agcp_ahb_gpr(agcp_ahb_gpr);
+			}
+		}
+
 		res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 		if (!res) {
 			pr_err("ERR:Must give me the base address!\n");

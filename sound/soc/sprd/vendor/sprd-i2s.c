@@ -1299,7 +1299,18 @@ static int i2s_drv_probe(struct platform_device *pdev)
 				syscon_regmap_lookup_by_phandle(node,
 					"sprd,syscon-agcp-ahb");
 			if (IS_ERR(agcp_ahb_gpr)) {
-				pr_warn("i2s: no sprd,syscon-agcp-ahb; AG_IIS0 route unavailable\n");
+				ret = PTR_ERR(agcp_ahb_gpr);
+				/*
+				 * The agcp-ahb syscon may not be registered yet
+				 * when this (early AP) device probes -- defer and
+				 * retry rather than silently losing the AG_IIS0
+				 * route. Only give up if the phandle is truly
+				 * absent/broken.
+				 */
+				if (ret == -EPROBE_DEFER)
+					return ret;
+				pr_warn("i2s: no sprd,syscon-agcp-ahb (%d); AG_IIS0 route unavailable\n",
+					ret);
 			} else {
 				u32 so = 0x100, co = 0x200;
 
@@ -1307,6 +1318,8 @@ static int i2s_drv_probe(struct platform_device *pdev)
 				of_property_read_u32(node, "clr-offset", &co);
 				set_agcp_ahb_offset(so, co);
 				arch_audio_set_agcp_ahb_gpr(agcp_ahb_gpr);
+				pr_info("i2s: acquired agcp-ahb gpr for AG_IIS0 route (set/clr 0x%x/0x%x)\n",
+					so, co);
 			}
 		}
 

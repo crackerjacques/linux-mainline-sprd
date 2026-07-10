@@ -4123,6 +4123,32 @@ static int sprd_codec_probe(struct platform_device *pdev)
 		return ret;
 	}
 
+	/*
+	 * Hold the AGDSP core awake for the system lifetime.
+	 *
+	 * The digital (DP-range) codec registers live in the audcp power
+	 * domain. sprd-audcp-boot exposes that domain as an always-on genpd
+	 * but with no power ops, so it does not keep the DSP core out of
+	 * deep-sleep at runtime. Once the DSP goes idle the core sleeps, and
+	 * an idle DP-register access (e.g. an amixer read of a codec control)
+	 * bus-faults with a fatal async SError -- while the PMU status bits
+	 * agdsp_can_access() polls can still momentarily read "awake",
+	 * racing the sleep transition.
+	 *
+	 * agdsp_access_enable() does the vendor wake sequence (mailbox +
+	 * PMU power-up poll) and, crucially, bumps ap_enable_cnt. The DSP
+	 * stays awake while any AP vote is held (cnt > 0). Take one vote here
+	 * and never release it: the core is then permanently accessible, so
+	 * codec register reads/writes from any context are safe. Per-access
+	 * enable/disable pairs elsewhere just nest on top (cnt >= 2 -> 1).
+	 */
+	ret = agdsp_access_enable();
+	if (ret == -EPROBE_DEFER)
+		return ret;
+	if (ret)
+		pr_err("%s: could not pin AGDSP awake (%d); DP reg access may be unsafe\n",
+		       __func__, ret);
+
 	ana_chip_id  = sci_get_ana_chip_id() >> 16;
 	pr_info("ana_chip_id is 0x%x\n", ana_chip_id);
 	ret = snd_soc_register_component(&pdev->dev,

@@ -208,15 +208,15 @@
 	digital-codec = <&sprd_audio_codec_dig>;
 };
 
-/*
- * Full stock ASoC card (unisoc,vbc-v4-codec-sc2730). The speaker PA is
- * an aw87xxx on GPIO 9 driven by the card's ext-PA pulse hook
- * (4 pulses then high = gain preset), exactly as stock.
- */
 &sound_vbc_v4_sprd_codec {
 	status = "okay";
-	sprd,spk-ext-pa-info = <0 0 0 0>;
-	sprd,spk-ext-pa-gpio = <&ap_gpio 9 1>;
+	/*
+	 * Stock Android drives speaker playback through the codec HP path, not
+	 * the SC2730 class-D SPK pin, so route Ext Spk/Ext Spk1 to HP Pin only.
+	 */
+	sprd-audio-card,routing =
+		"Ext Spk", "HP Pin",
+		"Ext Spk1", "HP Pin";
 };
 
 &pinctrl {
@@ -484,10 +484,10 @@
 	#address-cells = <1>;
 	#size-cells = <0>;
 
-	/*
-	 * The aw87xxx speaker amp at i2c 0x58 is deliberately NOT declared:
-	 * stock drives it purely via the GPIO-9 pulse hook in the sprd
-	 * machine card (sprd,spk-ext-pa-gpio above); an i2c driver would be
-	 * a second, conflicting control path.
-	 */
+	speaker_amp: audio-codec@58 {
+		/* Anbernic reused a previously mainlined awinic 87xxx amp */
+		compatible = "anbernic,rgds-amp";
+		reg = <0x58>;
+		sound-name-prefix = "Speaker Amp";
+	};
 };

@@ -65,6 +65,8 @@ static struct sprd_asoc_hook_spk_priv hook_spk_priv;
 static int select_mode;
 static u32 extral_iic_pa_en;
 
+extern int anbernic_rgds_amp_enable(int on);
+
 static ssize_t select_mode_show(struct kobject *kobj,
 				struct kobj_attribute *attr, char *buff)
 {
@@ -138,6 +140,7 @@ static void hook_gpio_pulse_control(unsigned int gpio, unsigned int mode)
 static int hook_general_spk(int id, int on)
 {
 	int gpio, mode;
+	int ret;
 #if 0
 	sp_asoc_pr_info("%s enter\n", __func__);
 	if (extral_iic_pa_en == 1) {
@@ -179,6 +182,9 @@ static int hook_general_spk(int id, int on)
 
 	/* Off */
 	if (!on) {
+		ret = anbernic_rgds_amp_enable(0);
+		if (ret && ret != -ENODEV)
+			pr_warn("%s rgds amp disable failed: %d\n", __func__, ret);
 		gpio_set_value(gpio, !EN_LEVEL);
           	msleep(5);
 		return HOOK_OK;
@@ -191,6 +197,9 @@ static int hook_general_spk(int id, int on)
 			__func__, mode, select_mode);
 	}
 	hook_gpio_pulse_control(gpio, mode);
+	ret = anbernic_rgds_amp_enable(1);
+	if (ret && ret != -ENODEV)
+		pr_warn("%s rgds amp enable failed: %d\n", __func__, ret);
 
 	/* When the first time open speaker path and play a very short sound,
 	 * the sound can't be heard. So add a delay here to make sure the AMP

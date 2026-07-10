@@ -168,4 +168,6 @@ struct aw87390 {
 	struct regulator *vdd_reg;
 };
 
+int anbernic_rgds_amp_enable(int on);
+
 #endif

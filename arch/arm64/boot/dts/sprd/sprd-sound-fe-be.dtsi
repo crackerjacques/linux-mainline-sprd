@@ -1121,8 +1121,38 @@
 	};
 
 	/*
-	 * The vendor "all-i2s" test card (sprd-pcm-iis + i2s0 +
-	 * unisoc,i2s-null-codec) is omitted: the i2s DAI and 2-stage DMA
-	 * platform drivers are not ported.
+	 * AP-side i2s0 playback/capture path. Unlike the VBC card above
+	 * (which rides the audcp agcp_dma whose completion IRQ never
+	 * reaches the AP), this uses the AP-owned ap_dma, so DMA period
+	 * interrupts are expected to work natively. Disabled by default;
+	 * the board dts enables ap_dma, i2s0 and this card.
 	 */
+	sprd_pcm_iis: sprd-pcm-iis {
+		compatible = "unisoc,sharkl5-pcm-platform";
+		#sound-dai-cells = <0>;
+		dmas = <&ap_dma 5 &ap_dma 6>;
+		dma-names = "iis0_tx", "iis0_rx";
+		sprd,dma-2stage-usecase = <2>;
+		sprd,node-count-2stage-level-1 = <1>;
+		sprd,syscon-pmu-apb = <&pmu_apb_regs>;
+		sprd,dma-2stage-level-1-int-source = <1>;
+	};
+
+	sound_sprd_ap_alliis: sound@1 {
+		compatible = "unisoc,i2s-null-codec";
+		status = "disabled";
+		sprd-audio-card,name = "all-i2s";
+		/* dai-links */
+		sprd-audio-card,dai-link@0 {
+			plat {
+				sound-dai = <&sprd_pcm_iis>;
+			};
+			cpu {
+				sound-dai = <&i2s0>;
+			};
+			codec {
+				sound-dai = <0 0>;
+			};
+		};
+	};
 };

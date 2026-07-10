@@ -31,32 +31,45 @@
 /*
  * The external Awinic AW87391 speaker amp is enabled via a direct exported
  * call (the same one the VBC card's spk-ext-pa hook uses), not a GPIO pulse.
- * Drive it from a DAPM speaker widget so it powers with the i2s0 stream.
+ *
+ * The all-i2s card uses the generic snd-soc-dummy codec (<0 0>), which
+ * exposes no named playback DAPM widget to route a speaker off, so drive
+ * the amp from the DAI link's startup/shutdown ops instead: it follows the
+ * i2s0 playback stream's open/close, deterministically and without any
+ * fragile widget-name dependency.
  */
 extern int anbernic_rgds_amp_enable(int on);
 
-static int i2s_ext_spk_event(struct snd_soc_dapm_widget *w,
-			     struct snd_kcontrol *kcontrol, int event)
+static int i2s_amp_startup(struct snd_pcm_substream *substream)
 {
-	int on = SND_SOC_DAPM_EVENT_ON(event);
 	int ret;
 
-	ret = anbernic_rgds_amp_enable(on);
+	if (substream->stream != SNDRV_PCM_STREAM_PLAYBACK)
+		return 0;
+
+	ret = anbernic_rgds_amp_enable(1);
 	if (ret && ret != -ENODEV)
-		pr_warn("%s: rgds amp %s failed: %d\n", __func__,
-			on ? "enable" : "disable", ret);
-	if (on)
+		pr_warn("%s: rgds amp enable failed: %d\n", __func__, ret);
+	else
 		msleep(22);	/* let the AMP settle before audio (VBC parity) */
 	return 0;
 }
 
-static const struct snd_soc_dapm_widget i2s_dapm_widgets[] = {
-	SND_SOC_DAPM_SPK("Ext Spk", i2s_ext_spk_event),
-};
+static void i2s_amp_shutdown(struct snd_pcm_substream *substream)
+{
+	int ret;
 
-/* "Playback" is the dummy codec DAI's playback stream widget. */
-static const struct snd_soc_dapm_route i2s_dapm_routes[] = {
-	{ "Ext Spk", NULL, "Playback" },
+	if (substream->stream != SNDRV_PCM_STREAM_PLAYBACK)
+		return;
+
+	ret = anbernic_rgds_amp_enable(0);
+	if (ret && ret != -ENODEV)
+		pr_warn("%s: rgds amp disable failed: %d\n", __func__, ret);
+}
+
+static const struct snd_soc_ops i2s_amp_ops = {
+	.startup = i2s_amp_startup,
+	.shutdown = i2s_amp_shutdown,
 };
 
 #ifdef CONFIG_PROC_FS
@@ -152,11 +165,9 @@ static int sprd_asoc_i2s_probe(struct platform_device *pdev)
 	card->controls = sprd_alli2s_card_controls.ptr;
 	card->num_controls = sprd_alli2s_card_controls.size;
 
-	/* Drive the external speaker amp from the playback DAPM path. */
-	card->dapm_widgets = i2s_dapm_widgets;
-	card->num_dapm_widgets = ARRAY_SIZE(i2s_dapm_widgets);
-	card->dapm_routes = i2s_dapm_routes;
-	card->num_dapm_routes = ARRAY_SIZE(i2s_dapm_routes);
+	/* Drive the external speaker amp with the i2s0 playback stream. */
+	if (card->num_links > 0)
+		card->dai_link[0].ops = &i2s_amp_ops;
 
 	card->late_probe = board_late_probe;
 

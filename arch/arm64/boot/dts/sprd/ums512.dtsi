@@ -1830,6 +1830,18 @@
 				status = "disabled";
 			};
 
+			sdio1: mmc@1200000 {
+				compatible = "sprd,sdhci-r11";
+				reg = <0x1200000 0x1000>;
+				interrupts = <GIC_SPI 20 IRQ_TYPE_LEVEL_HIGH>;
+				clocks = <&ap_clk CLK_SDIO1_2X>,
+					 <&apapb_gate CLK_SDIO1_EB>;
+				clock-names = "sdio", "enable";
+				assigned-clocks = <&ap_clk CLK_SDIO1_2X>;
+				assigned-clock-parents = <&pll2 CLK_LPLL_409M6>;
+				status = "disabled";
+			};
+
 			sdio3: mmc@1400000 {
 				compatible = "sprd,sdhci-r11";
 				reg = <0x1400000 0x1000>;

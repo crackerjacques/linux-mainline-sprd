@@ -6,6 +6,9 @@
 /dts-v1/;
 
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/clock/sprd,ums512-clk.h>
+#include <dt-bindings/mfd/sprd,sc2730-regs.h>
+#include <dt-bindings/mfd/sprd,sc2730-mask.h>
 #include "ums512.dtsi"
 #include "sc2730.dtsi"
 #include "sprd-sound-fe-be.dtsi"
@@ -530,4 +533,100 @@
 &sound_sprd_ap_alliis {
 	status = "disabled";
 	sprd,syscon-agcp-ahb = <&aon_apb_regs>;
+};
+
+/*
+ * Wi-Fi/BT/FM/GNSS: external Unisoc Marlin3-Lite (SC2355) WCN combo on the
+ * SDIO1 controller (0x71200000). The marlin core powers the chip (enable/reset
+ * GPIOs + regulators), downloads firmware over SDIO, then triggers a card
+ * rescan on sdio1 via the extcon link so the SDIO function enumerates.
+ */
+&sdio1 {
+	status = "okay";
+	bus-width = <4>;
+	no-sd;
+	no-mmc;
+	/*
+	 * Must stay REMOVABLE: the marlin core powers the WCN chip and then
+	 * forces an explicit card rescan (mmc_detect_change via the extcon
+	 * link) so the SDIO function enumerates; sdiohal sets
+	 * MMC_CAP_NONREMOVABLE at runtime only while the card is up, and
+	 * clears it on power-off. A DT "non-removable" makes the mmc core try
+	 * to init a card at boot while the chip is unpowered ("Failed to
+	 * initialize a non-removable card") and defeats the rescan handoff.
+	 * (The CMD5 poll storm on the empty slot when the chip is off is a
+	 * cosmetic dead-chip artifact; do not "fix" it by marking this host
+	 * non-removable.)
+	 */
+	cap-sdio-irq;
+	keep-power-in-suspend;
+	/* PHY tuning from the vendor ums512-1h10 overlay (WCN SDIO). */
+	sprd,phy-delay-sd-uhs-sdr104 = <0x7f 0x76 0x69 0x69>;
+	sprd,phy-delay-sd-uhs-sdr50 = <0x7f 0xf7 0xf5 0xf5>;
+	sd-uhs-sdr104;
+	sd-uhs-sdr50;
+};
+
+/ {
+	sprd_marlin3: sprd-marlin3 {
+		compatible = "unisoc,marlin3lite_sdio";
+
+		/*
+		 * &ap_gpio pins from the stock RG Rotate dtbo (overlay_1, the
+		 * joypad variant): enable 143, reset 95, m2-wakeup-ap 33,
+		 * m2-to-ap-irq 94. m2-wakeup-ap is the SDIO RX data-ready line
+		 * sdiohal takes its interrupt from, so it MUST be correct or no
+		 * received packet is ever delivered. (The camera variant
+		 * overlay_0 uses 97/32/96 - do not use those here.)
+		 */
+		enable-gpios = <&ap_gpio 143 GPIO_ACTIVE_LOW>;
+		reset-gpios = <&ap_gpio 95 GPIO_ACTIVE_LOW>;
+		m2-wakeup-ap-gpios = <&ap_gpio 33 GPIO_ACTIVE_LOW>;
+		m2-to-ap-irq-gpios = <&ap_gpio 94 GPIO_ACTIVE_LOW>;
+
+		avdd12-supply = <&vddwcn>;
+		avdd33-supply = <&vddwifipa>;
+		dcxo18-supply = <&vddsim2>;
+
+		clock-names = "clk_32k", "source", "enable";
+		clocks = <&aon_clk CLK_AUX0>,
+			 <&ext_32k>,
+			 <&aonapb_gate CLK_AUX0_EB>;
+
+		extcon = <&sdio1>;
+		sdhci-name = <&sdio1>;
+
+		/*
+		 * Primary firmware path is request_firmware("wcnmodem.bin") from
+		 * /lib/firmware. These file-name properties are the partition/direct
+		 * fallback if request_firmware fails.
+		 */
+		sprd,btwf-file-name = "/lib/firmware/wcnmodem.bin";
+		sprd,gnss-file-name = "/lib/firmware/gnssmodem.bin";
+
+		adma-tx;
+		adma-rx;
+
+		avdd12-parent-bound-chip = <REG_ANA_SLP_DCDC_PD_CTRL MASK_ANA_SLP_DCDCGEN1_PD_EN 0x0 MASK_ANA_SLP_DCDCGEN1_PD_EN>;
+		avdd12-bound-wbreq = <REG_ANA_LDO_XTL_EN10 MASK_ANA_LDO_VDDWCN_EXT_XTL3_EN 0x0 MASK_ANA_LDO_VDDWCN_EXT_XTL3_EN>;
+		avdd33-bound-wbreq = <REG_ANA_LDO_XTL_EN11 MASK_ANA_LDO_VDDWIFIPA_EXT_XTL3_EN 0x0 MASK_ANA_LDO_VDDWIFIPA_EXT_XTL3_EN>;
+
+		wlan {
+			compatible = "sprd,sc2355-sdio-wifi";
+		};
+
+		gnss {
+			compatible = "sprd,gnss";
+		};
+
+		sprd-mtty {
+			compatible = "sprd,mtty";
+			sprd,name = "ttyBT";
+		};
+
+		sprd-fm {
+			compatible = "sprd,marlin3-fm";
+			sprd,name = "sprd-fm";
+		};
+	};
 };

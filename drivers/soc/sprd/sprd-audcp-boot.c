@@ -14,7 +14,7 @@
 #include <linux/pm_domain.h>
 #include <linux/regmap.h>
 
-#define AGDSP_FIRMWARE_NAME		"sprd/ums512-agdsp.bin"
+#define AGDSP_FIRMWARE_NAME		"agdsp.bin"
 #define AGDSP_BOOT_OFFSET		0x80
 #define AGDSP_BOOT_PROTECT_MAGIC	0x9620
 

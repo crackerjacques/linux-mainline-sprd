@@ -159,7 +159,19 @@ static netdev_tx_t sc23xx_start_xmit(struct sk_buff *skb, struct net_device *nde
 	ndev->stats.tx_packets++;
 	ndev->stats.tx_bytes += skb->len;
 
-	sc23xx_tx_prepare(vif, skb);
+	/* 802.1X (EAPOL) frames must go through the command channel: the
+	 * firmware will not transmit a handshake frame as a plain data MSDU
+	 * before the pairwise key is installed, which stalls the 4-way
+	 * handshake. */
+	if (skb->protocol == htons(ETH_P_PAE)) {
+		sc23xx_tx_data2cmd(vif, skb);
+		return NETDEV_TX_OK;
+	}
+
+	if (sc23xx_tx_prepare(vif, skb)) {
+		dev_kfree_skb(skb);
+		return NETDEV_TX_OK;
+	}
 	sc23xx_tx_data(vif->sdev, skb);
 
 	return NETDEV_TX_OK;

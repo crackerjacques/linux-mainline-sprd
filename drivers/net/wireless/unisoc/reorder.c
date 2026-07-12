@@ -12,8 +12,21 @@
 #define SC23XX_SEQ_NUM_MASK	0xfff
 #define SC23XX_SEQ_HALF_RANGE	((SC23XX_SEQ_NUM_MASK + 1) >> 1)
 
+/* Upper bound on a firmware-supplied block-ack window (covers HT 64, VHT 256,
+ * HE 1024). Guards against a bogus win_size making the reorder buffer index
+ * run wild; see sc23xx_rx_addba_req(). */
+#define SC23XX_MAX_BA_WIN_SIZE	1024
+
+/*
+ * Frames released from the reorder buffer are collected onto @deliver and
+ * handed to the stack (sc23xx_rx_now) only after sta_lock is dropped by the
+ * caller. Delivering under the lock deadlocks: sc23xx_rx_now() -> netif_rx()
+ * runs the NET_RX softirq inline, which can re-enter sc23xx_start_xmit() ->
+ * sc23xx_tx_prepare() and take sta_lock again on the same thread.
+ */
 static void reorder_buf_advance(struct sc23xx_reorder_data *r,
-				unsigned int count, bool force)
+				unsigned int count, bool force,
+				struct sk_buff_head *deliver)
 {
 	struct list_head *head;
 	struct sk_buff *skb;
@@ -38,7 +51,7 @@ static void reorder_buf_advance(struct sc23xx_reorder_data *r,
 				hdr = (void *)skb->data;
 				last_msdu = le16_get_bits(hdr->flags_0,
 							  SC23XX_RX_LAST_MSDU);
-				sc23xx_rx_now(r->sdev, skb);
+				__skb_queue_tail(deliver, skb);
 			}
 		}
 
@@ -48,14 +61,15 @@ static void reorder_buf_advance(struct sc23xx_reorder_data *r,
 }
 
 static void reorder_insert(struct sc23xx_reorder_data *r, struct sk_buff *skb,
-			   u16 seq_num, bool last_msdu)
+			   u16 seq_num, bool last_msdu,
+			   struct sk_buff_head *deliver)
 {
 	u16 offset;
 
 	if (r->seq_start == SC23XX_SEQ_INVALID) {
 		r->seq_start = (seq_num + !!last_msdu) & SC23XX_SEQ_NUM_MASK;
 		wiphy_dbg(r->sdev->wiphy, "receiving first frame\n");
-		sc23xx_rx_now(r->sdev, skb);
+		__skb_queue_tail(deliver, skb);
 		return;
 	}
 
@@ -67,14 +81,14 @@ static void reorder_insert(struct sc23xx_reorder_data *r, struct sk_buff *skb,
 	}
 
 	if (offset > r->win_size) {
-		reorder_buf_advance(r, offset - r->win_size, true);
+		reorder_buf_advance(r, offset - r->win_size, true, deliver);
 		offset = r->win_size;
 	}
 
 	if (seq_num == r->seq_start) {
-		sc23xx_rx_now(r->sdev, skb);
+		__skb_queue_tail(deliver, skb);
 		if (last_msdu)
-			reorder_buf_advance(r, r->win_size, false);
+			reorder_buf_advance(r, r->win_size, false, deliver);
 		mod_timer(&r->timer, jiffies + SC23XX_BA_TIMEOUT);
 	} else {
 		u16 idx = (r->buf_pos + offset) % r->win_size;
@@ -87,7 +101,11 @@ static void reorder_insert(struct sc23xx_reorder_data *r, struct sk_buff *skb,
 static void reorder_timeout(struct timer_list *t)
 {
 	struct sc23xx_reorder_data *r = timer_container_of(r, t, timer);
+	struct sk_buff_head deliver;
+	struct sk_buff *skb;
 	unsigned int count;
+
+	__skb_queue_head_init(&deliver);
 
 	spin_lock_irq(&r->sdev->sta_lock);
 
@@ -104,10 +122,13 @@ static void reorder_timeout(struct timer_list *t)
 		goto out;
 
 	wiphy_warn(r->sdev->wiphy, "timeout, some RX frames lost\n");
-	reorder_buf_advance(r, count, true);
+	reorder_buf_advance(r, count, true, &deliver);
 
 out:
 	spin_unlock_irq(&r->sdev->sta_lock);
+
+	while ((skb = __skb_dequeue(&deliver)))
+		sc23xx_rx_now(r->sdev, skb);
 }
 
 void sc23xx_rx_reorder(struct sc23xx_dev *sdev, struct sk_buff *skb)
@@ -116,6 +137,10 @@ void sc23xx_rx_reorder(struct sc23xx_dev *sdev, struct sk_buff *skb)
 	u16 flags_0, flags_1, seq_info, sta_lut_idx;
 	struct sc23xx_reorder_data *r;
 	struct sc23xx_sta *sta;
+	struct sk_buff_head deliver;
+	unsigned long flags;
+
+	__skb_queue_head_init(&deliver);
 
 	if (skb->len < sizeof(*hdr)) {
 		wiphy_err(sdev->wiphy, "data packet too short\n");
@@ -147,27 +172,39 @@ void sc23xx_rx_reorder(struct sc23xx_dev *sdev, struct sk_buff *skb)
 		goto drop;
 	}
 
-	spin_lock(&sdev->sta_lock);
+	/*
+	 * sta_lock is also taken by the reorder timer (softirq) and other paths
+	 * with IRQs disabled; take it the same way here so the timer cannot fire
+	 * on this CPU mid-section and self-deadlock. Released frames are queued
+	 * on @deliver and pushed to the stack only after the unlock below —
+	 * sc23xx_rx_now() must never run under sta_lock (netif_rx() drains the
+	 * NET_RX softirq inline and re-enters sc23xx_tx_prepare(), which retakes
+	 * sta_lock -> recursive deadlock).
+	 */
+	spin_lock_irqsave(&sdev->sta_lock, flags);
 
 	sta = &sdev->sta[sta_lut_idx - SC23XX_STA_IDX_MIN];
 	if (!sta->valid) {
 		wiphy_dbg(sdev->wiphy, "rx: STA %d not found, dropping\n",
 			  sta_lut_idx);
-		spin_unlock(&sdev->sta_lock);
+		spin_unlock_irqrestore(&sdev->sta_lock, flags);
 		goto drop;
 	}
 
 	r = &sta->r[u16_get_bits(seq_info, SC23XX_RX_TID)];
 	if (!r->buf) {
 		wiphy_dbg(sdev->wiphy, "rx: no BA session, receiving\n");
-		spin_unlock(&sdev->sta_lock);
+		spin_unlock_irqrestore(&sdev->sta_lock, flags);
 		goto receive;
 	}
 
 	reorder_insert(r, skb, u16_get_bits(seq_info, SC23XX_RX_SEQ_NUM),
-		       u16_get_bits(flags_0, SC23XX_RX_LAST_MSDU));
+		       u16_get_bits(flags_0, SC23XX_RX_LAST_MSDU), &deliver);
 
-	spin_unlock(&sdev->sta_lock);
+	spin_unlock_irqrestore(&sdev->sta_lock, flags);
+
+	while ((skb = __skb_dequeue(&deliver)))
+		sc23xx_rx_now(sdev, skb);
 
 	return;
 
@@ -187,8 +224,26 @@ void sc23xx_rx_addba_req(struct sc23xx_dev *sdev, u8 sta_lut_idx, u8 tid,
 	struct sc23xx_sta *sta;
 	int i, ret;
 
-	wiphy_dbg(sdev->wiphy, "rx addba: sta %d tid %d: 0x%03x size 0x%04x\n",
+	wiphy_dbg(sdev->wiphy, "rx addba: sta %d tid %d: start 0x%03x size %u\n",
 		  sta_lut_idx, tid, win_start, win_size);
+
+	/*
+	 * win_size and tid come straight from the firmware event. A zero or
+	 * out-of-range win_size is fatal: reorder_buf_advance() does
+	 * `buf_pos % win_size` and indexes buf[buf_pos], so win_size == 0 makes
+	 * `% 0` (which does not trap on arm64) run the reorder loop off the end
+	 * of the buffer forever while holding sta_lock -> hard, IRQs-off, all-
+	 * CPU hang. kcalloc(0, ...) also returns ZERO_SIZE_PTR (not NULL), so
+	 * the !reorder_buf check below would not catch it. Reject bad values;
+	 * frames then take the no-BA path in sc23xx_rx_reorder.
+	 */
+	if (tid >= SC23XX_MAX_TID_NUM || win_size == 0 ||
+	    win_size > SC23XX_MAX_BA_WIN_SIZE) {
+		wiphy_err(sdev->wiphy,
+			  "rx addba: bad tid %u / win_size %u, ignoring\n",
+			  tid, win_size);
+		return;
+	}
 
 	reorder_buf = kcalloc(win_size, sizeof(struct list_head), GFP_KERNEL);
 	if (!reorder_buf)

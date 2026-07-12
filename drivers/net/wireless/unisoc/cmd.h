@@ -38,6 +38,8 @@ int sc23xx_cmd_addba_rsp(struct sc23xx_dev *sdev, struct sc23xx_sta *sta,
 int sc23xx_cmd_set_regdom(struct sc23xx_dev *sdev);
 int sc23xx_download_config_section(struct sc23xx_dev *sdev, u32 section,
 				   const void *data, u16 size);
+int sc23xx_download_ini_section(struct sc23xx_dev *sdev, u32 section,
+				const void *data, u16 size);
 int sc23xx_get_fw_info(struct sc23xx_dev *sdev);
 
 void sc23xx_cmd_tx_addba_req(struct work_struct *work);
@@ -48,6 +50,14 @@ struct sc23xx_event {
 	struct sk_buff *skb;
 };
 
+struct sc23xx_data2cmd {
+	struct work_struct work;
+	struct sc23xx_dev *sdev;
+	struct sk_buff *skb;
+	u8 ctx_id;
+};
+
 void sc23xx_handle_event(struct work_struct *work);
+void sc23xx_tx_data2cmd(struct sc23xx_vif *vif, struct sk_buff *skb);
 
 #endif

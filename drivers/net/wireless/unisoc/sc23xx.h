@@ -18,6 +18,12 @@
 #define SC23XX_MAX_TID_NUM		16
 #define SC23XX_TX_BA_WIN_SIZE		64
 
+/* Number of TX flow-control "colors" the firmware grants credit for.
+ * Only used on chips reporting credit_capa == SC23XX_TX_WITH_CREDIT.
+ */
+#define SC23XX_TX_COLORS		4
+#define SC23XX_TX_WITH_CREDIT		0
+
 #define SC23XX_CAPA_5G			BIT(0)
 #define SC23XX_CAPA_MCC			BIT(1)
 #define SC23XX_CAPA_ACL			BIT(2)
@@ -96,6 +102,11 @@ struct sc23xx_dev {
 
 	char country_code[2];
 
+	/* TX credit capability from firmware GET_INFO: 0 = with credit
+	 * (color/flow-control required), 1 = no credit.
+	 */
+	u8 credit_capa;
+
 	u8 mac_addr[ETH_ALEN];
 	struct ieee80211_supported_band band_2ghz;
 	struct ieee80211_supported_band band_5ghz;
@@ -128,12 +139,36 @@ struct sc23xx_dev {
 
 	spinlock_t sta_lock;
 	struct sc23xx_sta sta[SC23XX_STA_IDX_NUM];
+
+	/* Credit-based TX flow control (credit_capa == SC23XX_TX_WITH_CREDIT).
+	 * The firmware grants per-color credits via EVT_SDIO_FLOWCON; each data
+	 * frame consumes one credit and is stamped with its color + a running
+	 * sequence number.
+	 */
+	atomic_t tx_credit[SC23XX_TX_COLORS];
+	atomic_t tx_seq;
 };
 
 void *sc23xx_alloc_device(struct device *dev, size_t size,
 			  const struct sc23xx_bus_ops *bus_ops);
 void sc23xx_free_device(struct sc23xx_dev *sdev);
 int sc23xx_load_config(struct sc23xx_dev *sdev, const char *fw_name);
+int sc23xx_load_hw_param(struct sc23xx_dev *sdev, const char *fw_name);
+int sc23xx_sync_version(struct sc23xx_dev *sdev);
+
+/* Reserve one TX credit and return its color (0..SC23XX_TX_COLORS-1), or
+ * -EBUSY if no color has credit. Used by the credit-based (SDIO) transport.
+ */
+int sc23xx_tx_reserve_credit(struct sc23xx_dev *sdev);
+void sc23xx_tx_credit_add(struct sc23xx_dev *sdev, const u8 *flow);
+
+static inline u16 sc23xx_tx_seq_info(struct sc23xx_dev *sdev, int color)
+{
+	u8 seq = atomic_inc_return(&sdev->tx_seq);
+
+	/* packs as color_bit:2, seq_num:8 in the tx_data_hdr seq_info field */
+	return (color & 0x3) | (seq << 2);
+}
 int sc23xx_register_device(struct sc23xx_dev *sdev);
 void sc23xx_unregister_device(struct sc23xx_dev *sdev);
 

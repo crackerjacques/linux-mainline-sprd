@@ -80,9 +80,19 @@ static void reorder_insert(struct sc23xx_reorder_data *r, struct sk_buff *skb,
 		return;
 	}
 
-	if (offset > r->win_size) {
-		reorder_buf_advance(r, offset - r->win_size, true, deliver);
-		offset = r->win_size;
+	/*
+	 * The reorder window covers offsets [0, win_size - 1]. A frame at
+	 * offset >= win_size is ahead of the window and forces it forward so
+	 * the new frame sits at the window tail: new head = seq - win_size + 1,
+	 * i.e. advance by (offset - win_size + 1), leaving offset = win_size - 1.
+	 * (The original `> win_size` / advance `offset - win_size` / clamp to
+	 * win_size under-advanced by one at the edge and then indexed
+	 * (buf_pos + win_size) % win_size == buf_pos, misfiling the frame into
+	 * the head slot and corrupting the window.)
+	 */
+	if (offset >= r->win_size) {
+		reorder_buf_advance(r, offset - r->win_size + 1, true, deliver);
+		offset = r->win_size - 1;
 	}
 
 	if (seq_num == r->seq_start) {
@@ -95,6 +105,17 @@ static void reorder_insert(struct sc23xx_reorder_data *r, struct sk_buff *skb,
 
 		INIT_LIST_HEAD(&skb->list);
 		list_add_tail(&skb->list, &r->buf[idx]);
+
+		/*
+		 * A buffered frame is a hole waiting to be filled. The timer is
+		 * the only thing that releases held frames when the missing
+		 * seq_start never arrives; arm it here too, not just on in-order
+		 * delivery. Without this, a hole that forms while no timer is
+		 * pending (e.g. right after the first frame, which delivers but
+		 * never armed a timer) strands the buffer forever -> silent RX
+		 * wedge, no "frames lost", zero throughput.
+		 */
+		mod_timer(&r->timer, jiffies + SC23XX_BA_TIMEOUT);
 	}
 }
 

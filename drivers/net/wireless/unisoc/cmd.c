@@ -117,11 +117,11 @@ static int sc23xx_send_cmd_wait(struct sc23xx_dev *sdev, struct sk_buff *skb,
 
 	hdr = (void *)skb->data;
 	if (skb->len > sizeof(*hdr))
-		wiphy_info(sdev->wiphy, "command %d (subcmd %d, len %u)\n",
-			   hdr->cmd, ((u8 *)skb->data)[sizeof(*hdr)], skb->len);
+		wiphy_dbg(sdev->wiphy, "command %d (subcmd %d, len %u)\n",
+			  hdr->cmd, ((u8 *)skb->data)[sizeof(*hdr)], skb->len);
 	else
-		wiphy_info(sdev->wiphy, "command %d (len %u)\n",
-			   hdr->cmd, skb->len);
+		wiphy_dbg(sdev->wiphy, "command %d (len %u)\n",
+			  hdr->cmd, skb->len);
 
 	mutex_lock(&sdev->cmd_lock);
 
@@ -263,8 +263,8 @@ void sc23xx_tx_data2cmd(struct sc23xx_vif *vif, struct sk_buff *skb)
 		goto drop;
 	}
 
-	wiphy_info(sdev->wiphy, "EAPOL TX via cmd: dst=%pM lut_index=%u\n",
-		   ethhdr->h_dest, lut_index);
+	wiphy_dbg(sdev->wiphy, "EAPOL TX via cmd: dst=%pM lut_index=%u\n",
+		  ethhdr->h_dest, lut_index);
 
 	/* Prepend the TX descriptor (type CMD, no color/seq/credit). */
 	hdr = skb_push(skb, sizeof(*hdr));
@@ -1197,6 +1197,18 @@ static void sc23xx_handle_connect(struct sc23xx_vif *vif, struct sk_buff *skb)
 
 		vif->state = SC23XX_STATE_DISCONNECTED;
 
+		/*
+		 * A connection state change resets the data path. The netdev TX
+		 * queue may have been left stopped by transport backpressure
+		 * (SDIO credit starvation) whose wake condition — draining the
+		 * backlog — can no longer be met across a disconnect/roam, since
+		 * queue state is otherwise only reset on interface up/down. Wake
+		 * it so the next association isn't wedged. Skip if the DMA path
+		 * has its own backpressure asserted (tx_blocked; never on SDIO).
+		 */
+		if (!vif->sdev->tx_blocked)
+			sc23xx_netif_tx(vif->sdev, true);
+
 		return;
 	}
 
@@ -1239,6 +1251,11 @@ static void sc23xx_handle_connect(struct sc23xx_vif *vif, struct sk_buff *skb)
 	}
 
 	vif->state = SC23XX_STATE_CONNECTED;
+
+	/* Clear any stale transport backpressure from before this (re)connect
+	 * so the fresh link starts with the TX queue running. */
+	if (!vif->sdev->tx_blocked)
+		sc23xx_netif_tx(vif->sdev, true);
 }
 
 static void sc23xx_handle_disconnect(struct sc23xx_vif *vif, struct sk_buff *skb)
@@ -1266,6 +1283,11 @@ static void sc23xx_handle_disconnect(struct sc23xx_vif *vif, struct sk_buff *skb
 	}
 
 	vif->state = SC23XX_STATE_DISCONNECTED;
+
+	/* Unwedge the TX queue in case transport backpressure left it stopped
+	 * (see sc23xx_handle_connect). */
+	if (!vif->sdev->tx_blocked)
+		sc23xx_netif_tx(vif->sdev, true);
 }
 
 static void sc23xx_handle_scan_done(struct sc23xx_vif *vif, struct sk_buff *skb)
@@ -1513,6 +1535,15 @@ void sc23xx_tx_credit_add(struct sc23xx_dev *sdev, const u8 *flow)
 	for (i = 0; i < SC23XX_TX_COLORS; i++)
 		if (flow[i])
 			atomic_add(flow[i], &sdev->tx_credit[i]);
+
+	/*
+	 * Credit just landed: kick the transport in case it parked its TX path
+	 * on credit starvation (see sc23xx_sdio_data_tx_thread). The atomic_add
+	 * above is ordered before the wake, so a thread re-checking
+	 * sc23xx_tx_credit_ready() after the wake sees the new credit.
+	 */
+	if (sdev->bus_ops->tx_kick)
+		sdev->bus_ops->tx_kick(sdev);
 }
 
 static void sc23xx_handle_flowcon(struct sc23xx_dev *sdev, struct sk_buff *skb)

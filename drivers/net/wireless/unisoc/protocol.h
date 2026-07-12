@@ -32,8 +32,18 @@ struct sc23xx_hdr {
 #endif
 } __packed;
 
-/* sc23xx_rx_data_hdr.flags_0 */
-#define SC23XX_RX_LAST_MSDU	BIT(1)
+/*
+ * sc23xx_rx_data_hdr.flags_0. Bit layout matches the firmware's rx_msdu_desc:
+ *   bit0 first_msdu_of_buff   bit1 last_msdu_of_buff
+ *   bit4 first_msdu_of_mpdu   bit5 last_msdu_of_mpdu
+ *   bits 11-15 sta_lut_index
+ * The reorder window must advance on the last MSDU of the *MPDU* (bit5): for an
+ * A-MSDU every subframe shares one sequence number, and only the final subframe
+ * ends the MPDU. bit1 (last_msdu_of_buff) is set on essentially every frame
+ * (including each A-MSDU subframe), so using it advances the window on the
+ * first subframe and drops the rest as "old"/"duplicate" — ~loss per A-MSDU.
+ */
+#define SC23XX_RX_LAST_MSDU	BIT(5)
 #define SC23XX_RX_STA_LUT_IDX	GENMASK(15, 11)
 /* sc23xx_rx_data_hdr.flags_1 */
 #define SC23XX_RX_BROADCAST	BIT(4)

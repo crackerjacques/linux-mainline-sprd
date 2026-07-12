@@ -63,6 +63,12 @@ struct sc23xx_vif;
 struct sc23xx_bus_ops {
 	int (*tx_cmd)(struct sc23xx_dev *dev, struct sk_buff *skb);
 	void (*tx_data)(struct sc23xx_dev *dev, struct sk_buff *skb);
+	/*
+	 * Optional: nudge the transport after the core replenishes TX credit,
+	 * so a transport that parked its TX path on credit starvation can
+	 * resume. NULL for transports without credit-based flow control.
+	 */
+	void (*tx_kick)(struct sc23xx_dev *dev);
 };
 
 struct sc23xx_reorder_data {
@@ -161,6 +167,26 @@ int sc23xx_sync_version(struct sc23xx_dev *sdev);
  */
 int sc23xx_tx_reserve_credit(struct sc23xx_dev *sdev);
 void sc23xx_tx_credit_add(struct sc23xx_dev *sdev, const u8 *flow);
+
+/* True if a data frame can be sent now: either the chip needs no credit, or at
+ * least one color has a credit to spend. Used by the credit-based transport to
+ * decide whether to drain its TX backlog or park until the next grant. */
+static inline bool sc23xx_tx_credit_ready(struct sc23xx_dev *sdev)
+{
+	int i;
+
+	if (sdev->credit_capa != SC23XX_TX_WITH_CREDIT)
+		return true;
+
+	for (i = 0; i < SC23XX_TX_COLORS; i++)
+		if (atomic_read(&sdev->tx_credit[i]) > 0)
+			return true;
+
+	return false;
+}
+
+/* Wake (or stop) the netdev TX queues of every open interface. */
+void sc23xx_netif_tx(struct sc23xx_dev *sdev, bool wake);
 
 static inline u16 sc23xx_tx_seq_info(struct sc23xx_dev *sdev, int color)
 {

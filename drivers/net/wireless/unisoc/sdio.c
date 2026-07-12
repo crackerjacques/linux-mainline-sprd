@@ -45,11 +45,20 @@
 #define SC23XX_SDIO_MAX_DATA_LEN	1676
 
 /*
- * Upper bound on data frames queued to the TX thread. ndo_start_xmit runs in
- * softirq and cannot do the (sleeping) direct SDIO write itself, so frames are
- * handed to a kthread; cap the backlog so a stalled thread can't consume
- * unbounded memory.
+ * Bounds on the data-frame backlog queued to the TX thread. ndo_start_xmit
+ * runs in softirq and cannot do the (sleeping) direct SDIO write itself, so
+ * frames are handed to a kthread.
+ *
+ * The backlog is the backpressure signal: when it reaches the high-water mark
+ * (e.g. the thread is parked on TX-credit starvation) we stop the netdev TX
+ * queues so the stack holds off instead of us dropping frames — a drop is a
+ * TCP loss signal that collapses the connection's window. The thread wakes the
+ * queues again once it drains back below the low-water mark. MAX is a hard
+ * safety cap for the race window between stopping the queue and the stack
+ * noticing; hitting it (and dropping) should be rare.
  */
+#define SC23XX_SDIO_DATA_TXQ_HIGH	384
+#define SC23XX_SDIO_DATA_TXQ_LOW	128
 #define SC23XX_SDIO_DATA_TXQ_MAX	512
 
 struct sc23xx_sdio {
@@ -105,7 +114,17 @@ static int sc23xx_sdio_tx(int chn, const void *data, u16 len, bool direct)
 
 	ret = direct ? sprdwcn_bus_push_list_direct(chn, head, tail, num) :
 		       sprdwcn_bus_push_list(chn, head, tail, num);
-	if (ret) {
+
+	/*
+	 * The buffered path completes asynchronously: sdiohal returns the mbuf
+	 * via the pop_link callback (sc23xx_sdio_tx_pop), which frees buf. The
+	 * direct path is synchronous (the ADMA write has finished by the time
+	 * push_list_direct returns) and sdiohal never invokes pop_link for it,
+	 * so we must release buf and the mbuf here or the channel's mbuf pool
+	 * leaks a slot per frame and eventually drains to empty. The error path
+	 * is the same cleanup for both.
+	 */
+	if (ret || direct) {
 		head->buf = NULL;
 		kfree(buf);
 		sprdwcn_bus_list_free(chn, head, tail, num);
@@ -124,8 +143,12 @@ static int sc23xx_sdio_tx_cmd(struct sc23xx_dev *sdev, struct sk_buff *skb)
  * Stamp and transmit one data frame. Runs in the TX-thread (process) context:
  * the data port must be written with the "direct" sdiohal path, which wakes
  * the CP before the transfer and sleeps, so it cannot run from softirq.
+ *
+ * Returns true if the frame was consumed (sent or freed), false if it could
+ * not be sent right now (no TX credit) and the caller should requeue it and
+ * park until the firmware grants more credit.
  */
-static void sc23xx_sdio_send_data_frame(struct sc23xx_dev *sdev,
+static bool sc23xx_sdio_send_data_frame(struct sc23xx_dev *sdev,
 					struct sk_buff *skb)
 {
 	struct sc23xx_tx_data_hdr *hdr = (void *)skb->data;
@@ -133,37 +156,34 @@ static void sc23xx_sdio_send_data_frame(struct sc23xx_dev *sdev,
 	/*
 	 * SC2355 gates data TX on per-color credits granted by the firmware
 	 * (EVT_SDIO_FLOWCON). Every frame must carry a color that has credit
-	 * plus a running sequence number in the data header's seq_info field;
-	 * sending an unstamped (color 0 / seq 0, no credit) frame asserts the
-	 * CP. Reserve a credit here and stamp the frame. If no credit is
-	 * available, drop the frame rather than crash the firmware.
+	 * plus a running sequence number in the data header's seq_info field.
+	 * Reserve a credit here and stamp the frame. If none is available,
+	 * leave the frame for the caller to requeue rather than dropping it:
+	 * dropping is a TCP loss signal that collapses throughput, so we push
+	 * back on the stack (netif queue stop) and wait for the next grant.
 	 */
 	if (sdev->credit_capa == SC23XX_TX_WITH_CREDIT) {
 		int color = sc23xx_tx_reserve_credit(sdev);
 
-		if (color < 0) {
-			wiphy_warn_ratelimited(sdev->wiphy,
-					       "no TX credit, dropping data frame\n");
-			dev_kfree_skb_any(skb);
-			return;
-		}
+		if (color < 0)
+			return false;
 
 		put_unaligned_le16(sc23xx_tx_seq_info(sdev, color),
 				   &hdr->seq_info);
 	}
 
-	if (net_ratelimit())
-		wiphy_info(sdev->wiphy,
-			   "tx data (direct): type=%u lut=%u seq_info=0x%04x len=%u cred[%d %d %d %d]\n",
-			   hdr->common.type, hdr->sta_lut_index,
-			   get_unaligned_le16(&hdr->seq_info), skb->len,
-			   atomic_read(&sdev->tx_credit[0]),
-			   atomic_read(&sdev->tx_credit[1]),
-			   atomic_read(&sdev->tx_credit[2]),
-			   atomic_read(&sdev->tx_credit[3]));
+	wiphy_dbg(sdev->wiphy,
+		  "tx data (direct): type=%u lut=%u seq_info=0x%04x len=%u cred[%d %d %d %d]\n",
+		  hdr->common.type, hdr->sta_lut_index,
+		  get_unaligned_le16(&hdr->seq_info), skb->len,
+		  atomic_read(&sdev->tx_credit[0]),
+		  atomic_read(&sdev->tx_credit[1]),
+		  atomic_read(&sdev->tx_credit[2]),
+		  atomic_read(&sdev->tx_credit[3]));
 
 	sc23xx_sdio_tx(SC23XX_SDIO_TX_DATA_PORT, skb->data, skb->len, true);
 	dev_kfree_skb_any(skb);
+	return true;
 }
 
 static int sc23xx_sdio_data_tx_thread(void *data)
@@ -174,26 +194,37 @@ static int sc23xx_sdio_data_tx_thread(void *data)
 
 	while (!kthread_should_stop()) {
 		/*
-		 * Declare the host idle while we have nothing to send, so a
-		 * firmware power-down request (EVT_FW_PWR_DOWN) is acked and the
-		 * CP is allowed to suspend its WiFi data subsystem.
+		 * Only declare the host idle when the backlog is genuinely
+		 * empty. HOST_IDLE lets the firmware power down its WiFi data
+		 * subsystem (EVT_FW_PWR_DOWN -> SUSPENDED), which tears down the
+		 * data path in BOTH directions — so going idle while frames are
+		 * still queued (e.g. parked on TX-credit starvation) would strand
+		 * that TX *and* drop inbound frames like the DHCP OFFER, which
+		 * looks like "associated but never gets an IP." So idle only with
+		 * an empty queue; otherwise fall through and stay active while we
+		 * wait for the credit to flush what we have.
 		 */
-		mutex_lock(&sdev->pwr_state_lock);
-		sdev->pwr_state = SC23XX_PWR_HOST_IDLE;
-		mutex_unlock(&sdev->pwr_state_lock);
+		if (skb_queue_empty(&priv->data_txq)) {
+			mutex_lock(&sdev->pwr_state_lock);
+			sdev->pwr_state = SC23XX_PWR_HOST_IDLE;
+			mutex_unlock(&sdev->pwr_state_lock);
 
-		wait_event_interruptible(priv->data_tx_wait,
-					 !skb_queue_empty(&priv->data_txq) ||
-					 kthread_should_stop());
-		if (kthread_should_stop())
-			break;
+			wait_event_interruptible(priv->data_tx_wait,
+						 !skb_queue_empty(&priv->data_txq) ||
+						 kthread_should_stop());
+			if (kthread_should_stop())
+				break;
+		}
 
 		/*
-		 * Wake the firmware's data subsystem before writing to the data
-		 * port. If we acked a power-down (pwr_state SUSPENDED), the CP has
-		 * torn down its port-10 receive path, so a data CMD53 hangs and
-		 * times out (-110). HOST_WAKEUP_FW brings it back and blocks until
-		 * the CP acks. Mirrors the SIPC transport's wake in sc23xx_sipc.
+		 * We have frames to send: bring the firmware's data subsystem
+		 * back up before touching the data port. If we acked a power-down
+		 * (pwr_state SUSPENDED), the CP has torn down its port-10 receive
+		 * path, so a data CMD53 hangs and times out (-110). HOST_WAKEUP_FW
+		 * brings it back and blocks until the CP acks. Mirrors the SIPC
+		 * transport's wake in sc23xx_sipc. Do this *before* waiting on
+		 * credit so the CP stays up (and keeps delivering RX) while we
+		 * wait for a grant.
 		 */
 		mutex_lock(&sdev->pwr_state_lock);
 		if (sdev->pwr_state == SC23XX_PWR_SUSPENDED)
@@ -201,8 +232,53 @@ static int sc23xx_sdio_data_tx_thread(void *data)
 		sdev->pwr_state = SC23XX_PWR_ACTIVE;
 		mutex_unlock(&sdev->pwr_state_lock);
 
-		while ((skb = skb_dequeue(&priv->data_txq)))
-			sc23xx_sdio_send_data_frame(sdev, skb);
+		/*
+		 * Wait for the credit to actually send. We stay ACTIVE here (not
+		 * idle) so a credit stall becomes netif backpressure without
+		 * suspending the CP. sc23xx_tx_credit_add() kicks us via
+		 * sc23xx_sdio_tx_kick() when the firmware grants more. The queue
+		 * is non-empty and only this thread drains it, so credit
+		 * readiness is the only thing left to wait on.
+		 */
+		wait_event_interruptible(priv->data_tx_wait,
+					 sc23xx_tx_credit_ready(sdev) ||
+					 kthread_should_stop());
+		if (kthread_should_stop())
+			break;
+
+		while ((skb = skb_dequeue(&priv->data_txq))) {
+			if (!sc23xx_sdio_send_data_frame(sdev, skb)) {
+				/*
+				 * Out of credit: put the frame back at the head
+				 * of the queue (preserving order) and stop
+				 * draining. The outer wait re-parks us until a
+				 * grant arrives; meanwhile the backlog stays up
+				 * and keeps the netdev queues stopped.
+				 */
+				skb_queue_head(&priv->data_txq, skb);
+				break;
+			}
+
+			/*
+			 * Drained back below the low-water mark: let the stack
+			 * feed us again. netif_wake_queue is idempotent, so an
+			 * extra call when already running is harmless.
+			 */
+			if (skb_queue_len(&priv->data_txq) <=
+			    SC23XX_SDIO_DATA_TXQ_LOW)
+				sc23xx_netif_tx(sdev, true);
+		}
+
+		/*
+		 * Backlog fully drained: make sure the netdev queues are running
+		 * again. This also closes the race where the enqueue side stops
+		 * the queues just as we empty them — without it they could be
+		 * left stopped with nothing queued to trigger a wake. (Skipped
+		 * on the no-credit break above, which leaves the queue
+		 * non-empty and the backpressure intentionally in place.)
+		 */
+		if (skb_queue_empty(&priv->data_txq))
+			sc23xx_netif_tx(sdev, true);
 	}
 
 	/* Drain anything still queued at teardown. */
@@ -217,6 +293,7 @@ static int sc23xx_sdio_data_tx_thread(void *data)
 static void sc23xx_sdio_tx_data(struct sc23xx_dev *sdev, struct sk_buff *skb)
 {
 	struct sc23xx_sdio *priv = container_of(sdev, struct sc23xx_sdio, sdev);
+	unsigned int qlen;
 
 	if (skb_queue_len(&priv->data_txq) >= SC23XX_SDIO_DATA_TXQ_MAX) {
 		wiphy_warn_ratelimited(sdev->wiphy,
@@ -226,12 +303,32 @@ static void sc23xx_sdio_tx_data(struct sc23xx_dev *sdev, struct sk_buff *skb)
 	}
 
 	skb_queue_tail(&priv->data_txq, skb);
+	qlen = skb_queue_len(&priv->data_txq);
+	wake_up(&priv->data_tx_wait);
+
+	/*
+	 * Backlog building up (typically the TX thread parked on credit
+	 * starvation): stop the netdev queues so the stack holds off rather
+	 * than us overrunning the backlog and dropping. The thread re-wakes
+	 * them once it drains below the low-water mark.
+	 */
+	if (qlen >= SC23XX_SDIO_DATA_TXQ_HIGH)
+		sc23xx_netif_tx(sdev, false);
+}
+
+/* Credit landed (sc23xx_tx_credit_add): unpark the TX thread so it can drain
+ * the frames it parked on credit starvation. */
+static void sc23xx_sdio_tx_kick(struct sc23xx_dev *sdev)
+{
+	struct sc23xx_sdio *priv = container_of(sdev, struct sc23xx_sdio, sdev);
+
 	wake_up(&priv->data_tx_wait);
 }
 
 static const struct sc23xx_bus_ops sc23xx_sdio_bus_ops = {
 	.tx_cmd = sc23xx_sdio_tx_cmd,
 	.tx_data = sc23xx_sdio_tx_data,
+	.tx_kick = sc23xx_sdio_tx_kick,
 };
 
 /* TX completion: sdiohal is done with the buffers, free them. */

@@ -152,23 +152,31 @@ static void sc23xx_rx_addr_list(struct sc23xx_dev *sdev, struct sk_buff *skb)
 	spin_unlock(&sdev->rx_buf_lock);
 }
 
-/* Called with tx_buf_lock held */
-static void sc23xx_allow_tx(struct sc23xx_dev *sdev, bool allow)
+/* Wake (or stop) the netdev TX queues of every open interface. */
+void sc23xx_netif_tx(struct sc23xx_dev *sdev, bool wake)
 {
 	struct sc23xx_vif *vif;
-	int i;
+	int i, idx;
 
-	sdev->tx_blocked = !allow;
-
+	idx = srcu_read_lock(&sdev->vif_srcu);
 	for (i = 0; i < SC23XX_VIF_NUM; i++) {
 		vif = srcu_dereference(sdev->vif[i], &sdev->vif_srcu);
 		if (vif && test_bit(SC23XX_FLAG_OPENED, &vif->flags)) {
-			if (allow)
+			if (wake)
 				netif_wake_queue(vif->wdev.netdev);
 			else
 				netif_stop_queue(vif->wdev.netdev);
 		}
 	}
+	srcu_read_unlock(&sdev->vif_srcu, idx);
+}
+EXPORT_SYMBOL_GPL(sc23xx_netif_tx);
+
+/* Called with tx_buf_lock held */
+static void sc23xx_allow_tx(struct sc23xx_dev *sdev, bool allow)
+{
+	sdev->tx_blocked = !allow;
+	sc23xx_netif_tx(sdev, allow);
 }
 
 /* May be called from interrupt context */
@@ -290,10 +298,9 @@ void sc23xx_rx_msg(struct sc23xx_dev *sdev, enum sc23xx_msg_type type,
 			const u8 *f = skb->data + SC23XX_RX_CREDIT_OFFSET;
 
 			sc23xx_tx_credit_add(sdev, f);
-			if (net_ratelimit())
-				wiphy_info(sdev->wiphy,
-					"specdata len=%u off16+[%*ph]\n",
-					skb->len, 24, skb->data + 16);
+			wiphy_dbg(sdev->wiphy,
+				  "specdata len=%u off16+[%*ph]\n",
+				  skb->len, 24, skb->data + 16);
 		}
 
 		sc23xx_rx_reorder(sdev, skb);

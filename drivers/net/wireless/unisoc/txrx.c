@@ -276,13 +276,34 @@ void sc23xx_rx_msg(struct sc23xx_dev *sdev, enum sc23xx_msg_type type,
 			   hdr->type);
 		dev_kfree_skb_any(skb);
 	} else {
+		/*
+		 * Special-data frames carry a TX credit grant (flow[0..3]) in
+		 * the firmware's rx descriptor rsvd5 word at offset 24. This is
+		 * NOT sizeof(sc23xx_rx_data_hdr) (22): the CP descriptor is two
+		 * bytes longer than the header mainline parses (it drops the
+		 * upper half of WORD12). This is the main credit replenishment
+		 * path once the initial grant is spent.
+		 */
+		if (hdr->type == SC23XX_HDR_TYPE_SPECIAL_DATA &&
+		    sdev->credit_capa == SC23XX_TX_WITH_CREDIT &&
+		    skb->len >= SC23XX_RX_CREDIT_OFFSET + SC23XX_TX_COLORS) {
+			const u8 *f = skb->data + SC23XX_RX_CREDIT_OFFSET;
+
+			sc23xx_tx_credit_add(sdev, f);
+			if (net_ratelimit())
+				wiphy_info(sdev->wiphy,
+					"specdata len=%u off16+[%*ph]\n",
+					skb->len, 24, skb->data + 16);
+		}
+
 		sc23xx_rx_reorder(sdev, skb);
 	}
 }
 EXPORT_SYMBOL_GPL(sc23xx_rx_msg);
 
-/* Called from ndo_start_xmit (softirqs disabled) */
-void sc23xx_tx_prepare(struct sc23xx_vif *vif, struct sk_buff *skb)
+/* Called from ndo_start_xmit (softirqs disabled). Returns 0 if the frame is
+ * ready to transmit, or a negative errno if the caller should drop it. */
+int sc23xx_tx_prepare(struct sc23xx_vif *vif, struct sk_buff *skb)
 {
 	struct ethhdr *ethhdr = (void *)skb->data;
 	struct sc23xx_tx_data_hdr *hdr;
@@ -334,13 +355,23 @@ void sc23xx_tx_prepare(struct sc23xx_vif *vif, struct sk_buff *skb)
 	}
 	spin_unlock_irqrestore(&vif->sdev->sta_lock, flags);
 
-	if (!hdr->sta_lut_index) {
-		if (vif->mode == SC23XX_MODE_AP)
-			hdr->sta_lut_index = SC23XX_STA_IDX_AP_MULTICAST;
-		else
-			netdev_err(vif->wdev.netdev,
-			           "no STA index found - connection lost?\n");
+	if (!hdr->sta_lut_index && vif->mode == SC23XX_MODE_AP)
+		hdr->sta_lut_index = SC23XX_STA_IDX_AP_MULTICAST;
+
+	/*
+	 * The firmware asserts (module_id=7 vdev op on sta_idx=0 -> reset) if we
+	 * transmit a unicast frame with an unresolved LUT index. Group/multicast
+	 * frames legitimately use the reserved indices (< SC23XX_STA_IDX_MIN), so
+	 * only drop unresolved unicast frames rather than stamping a bogus 0.
+	 */
+	if (hdr->sta_lut_index < SC23XX_STA_IDX_MIN &&
+	    !is_multicast_ether_addr(ethhdr->h_dest)) {
+		net_dbg_ratelimited("%s: no STA LUT index for %pM, dropping\n",
+				    netdev_name(vif->wdev.netdev), ethhdr->h_dest);
+		return -ENXIO;
 	}
+
+	return 0;
 }
 
 /* Called from ndo_start_xmit (softirqs disabled) */

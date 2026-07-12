@@ -82,6 +82,13 @@ struct sc23xx_tx_data_hdr {
 #define SC23XX_DMA_TXC_OFFSET		0x10
 #define SC23XX_RX_DMA_HEADER_SIZE	0x1c
 
+/* Byte offset of the TX credit grant (rsvd5 in the firmware's rx_msdu_desc)
+ * within a special-data RX frame. The firmware descriptor is 28 bytes; the
+ * header mainline parses (sc23xx_rx_data_hdr) is only 22, so this is not its
+ * sizeof.
+ */
+#define SC23XX_RX_CREDIT_OFFSET		24
+
 struct sc23xx_addr {
 	__le32 l;
 	u8 h;
@@ -147,6 +154,7 @@ enum {
 	CMD_OPEN = 0x03,
 	CMD_CLOSE = 0x04,
 	CMD_POWER_SAVE = 0x05,
+	CMD_SYNC_VERSION = 0x09,
 	CMD_CONNECT = 0x0a,
 	CMD_SCAN = 0x0b,
 	CMD_SCHED_SCAN = 0x0c,
@@ -168,6 +176,7 @@ enum {
 	EVT_MGMT_FRAME = 0x83,
 	EVT_MGMT_TX_STATUS = 0x84,
 	EVT_MAC_POWER = 0xa2,
+	EVT_SDIO_FLOWCON = 0xb3,
 	EVT_BA = 0xf3,
 	EVT_STA_LUT_INDEX = 0xf5,
 	EVT_FW_PWR_DOWN = 0xfa,

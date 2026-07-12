@@ -145,6 +145,18 @@ static void reorder_timeout(struct timer_list *t)
 	wiphy_warn(r->sdev->wiphy, "timeout, some RX frames lost\n");
 	reorder_buf_advance(r, count, true, &deliver);
 
+	/*
+	 * The force-advance above stops on the highest buffered frame's slot, so
+	 * seq_start ends up equal to the last delivered seq, not one past it.
+	 * Step over it into the (now empty) next slot so the next in-sequence
+	 * frame is treated as in-order. The force=false pass does exactly one
+	 * iteration here and breaks on the empty slot. Without this, seq_start
+	 * stays one behind forever: every subsequent frame lands at offset 1,
+	 * gets buffered, and is only released by the next 100ms timeout ->
+	 * permanent ~100ms RX latency and a "frames lost" warning per packet.
+	 */
+	reorder_buf_advance(r, r->win_size, false, &deliver);
+
 out:
 	spin_unlock_irq(&r->sdev->sta_lock);
 

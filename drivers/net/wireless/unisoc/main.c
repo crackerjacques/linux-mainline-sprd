@@ -322,14 +322,6 @@ static int sc23xx_sched_scan_stop(struct wiphy *wiphy, struct net_device *ndev,
 	return 0;
 }
 
-static int sc23xx_set_rekey_data(struct wiphy *wiphy, struct net_device *ndev,
-				 struct cfg80211_gtk_rekey_data *data)
-{
-	struct sc23xx_vif *vif = netdev_priv(ndev);
-
-	return sc23xx_cmd_set_rekey_data(vif, data);
-}
-
 static const struct cfg80211_ops sc23xx_ops = {
 #ifdef CONFIG_PM
 	.suspend = sc23xx_suspend,
@@ -349,7 +341,11 @@ static const struct cfg80211_ops sc23xx_ops = {
 	.set_power_mgmt = sc23xx_set_power_mgmt,
 	.sched_scan_start = sc23xx_sched_scan_start,
 	.sched_scan_stop = sc23xx_sched_scan_stop,
-	.set_rekey_data = sc23xx_set_rekey_data,
+	/*
+	 * GTK rekey offload (.set_rekey_data) is deliberately not advertised:
+	 * the marlin3_lite firmware asserts on CMD_KEY/SUBCMD_REKEY (resets CP2
+	 * right after the 4-way handshake). Rekeying is handled in-host instead.
+	 */
 };
 
 static void sc23xx_reg_notify(struct wiphy *wiphy,
@@ -442,6 +438,10 @@ void *sc23xx_alloc_device(struct device *dev, size_t size,
 	hash_init(sdev->rx_buf_table);
 
 	memcpy(sdev->country_code, "00", 2);
+
+	atomic_set(&sdev->tx_seq, 0);
+	for (i = 0; i < SC23XX_TX_COLORS; i++)
+		atomic_set(&sdev->tx_credit[i], 0);
 
 	for (i = 0; i < SC23XX_STA_IDX_NUM; i++) {
 		sdev->sta[i].sdev = sdev;
@@ -584,6 +584,16 @@ int sc23xx_register_device(struct sc23xx_dev *sdev)
 	if (ret) {
 		wiphy_err(sdev->wiphy, "failed to get firmware info\n");
 		return ret;
+	}
+
+	/* Neither the platform (DT) nor the firmware provided a MAC (SC2355
+	 * keeps it in a per-unit vendor file we don't read); fall back to a
+	 * random locally-administered address so the interface is usable.
+	 */
+	if (is_zero_ether_addr(sdev->mac_addr)) {
+		eth_random_addr(sdev->mac_addr);
+		wiphy_info(sdev->wiphy, "using random MAC address %pM\n",
+			   sdev->mac_addr);
 	}
 
 	ret = wiphy_register(sdev->wiphy);

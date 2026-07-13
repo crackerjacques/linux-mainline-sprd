@@ -616,12 +616,18 @@
 
 		sprd-mtty {
 			compatible = "sprd,mtty";
-			sprd,name = "ttyBT";
-		};
-
-		sprd-fm {
-			compatible = "sprd,marlin3-fm";
-			sprd,name = "sprd-fm";
+			/*
+			 * btsprdsdio derives a stable, per-unit locally-
+			 * administered BD address from the SoC's 64-bit die UID
+			 * (efuse@800 uid-start/uid-end) and sets it via
+			 * set_bdaddr() during setup. This also marks the
+			 * controller configured; without a valid address hci0
+			 * comes up HCI_UNCONFIGURED and "hciconfig hci0 up"
+			 * returns EOPNOTSUPP. An optional "local-bd-address"
+			 * property here still overrides the derived address.
+			 */
+			nvmem-cells = <&uid_start>, <&uid_end>;
+			nvmem-cell-names = "uid-start", "uid-end";
 		};
 	};
 };

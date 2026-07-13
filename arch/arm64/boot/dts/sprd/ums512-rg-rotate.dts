@@ -380,6 +380,14 @@
 	};
 };
 
+&led1 {
+	linux,default-trigger = "default-on";
+};
+
+&led2 {
+	label = "yellow";
+};
+
 /* SC2730 fuel gauge — battery voltage / capacity reporting. */
 &sc2730_fgu {
 	status = "okay";

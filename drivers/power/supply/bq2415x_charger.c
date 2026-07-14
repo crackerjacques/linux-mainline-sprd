@@ -27,6 +27,9 @@
 #include <linux/i2c.h>
 #include <linux/slab.h>
 #include <linux/acpi.h>
+#include <linux/regulator/driver.h>
+#include <linux/regulator/machine.h>
+#include <linux/regulator/of_regulator.h>
 
 #include <linux/power/bq2415x_charger.h>
 
@@ -173,6 +176,7 @@ struct bq2415x_device {
 	int automode;	/* 1 - enabled, 0 - disabled; -1 - not supported */
 	int charge_status;
 	int id;
+	struct regulator_dev *usb_vbus_reg;
 };
 
 /* each registered chip must have unique id */
@@ -783,6 +787,70 @@ static int bq2415x_set_mode(struct bq2415x_device *bq, enum bq2415x_mode mode)
 	return 0;
 
 }
+
+/**** USB OTG VBUS regulator (charger boost mode) ****/
+
+#ifdef CONFIG_REGULATOR
+static int bq2415x_vbus_enable(struct regulator_dev *rdev)
+{
+	struct bq2415x_device *bq = rdev_get_drvdata(rdev);
+
+	return bq2415x_set_mode(bq, BQ2415X_MODE_BOOST);
+}
+
+static int bq2415x_vbus_disable(struct regulator_dev *rdev)
+{
+	struct bq2415x_device *bq = rdev_get_drvdata(rdev);
+
+	return bq2415x_set_mode(bq, BQ2415X_MODE_OFF);
+}
+
+static int bq2415x_vbus_is_enabled(struct regulator_dev *rdev)
+{
+	struct bq2415x_device *bq = rdev_get_drvdata(rdev);
+	int ret;
+
+	ret = bq2415x_exec_command(bq, BQ2415X_BOOST_MODE_STATUS);
+	if (ret < 0)
+		return ret;
+
+	return !!ret;
+}
+
+static const struct regulator_ops bq2415x_vbus_ops = {
+	.enable		= bq2415x_vbus_enable,
+	.disable	= bq2415x_vbus_disable,
+	.is_enabled	= bq2415x_vbus_is_enabled,
+};
+
+static const struct regulator_desc bq2415x_vbus_desc = {
+	.name		= "usb_otg_vbus",
+	.of_match	= of_match_ptr("usb-otg-vbus"),
+	.type		= REGULATOR_VOLTAGE,
+	.owner		= THIS_MODULE,
+	.ops		= &bq2415x_vbus_ops,
+	.fixed_uV	= 5000000,
+	.n_voltages	= 1,
+};
+
+static int bq2415x_register_vbus_regulator(struct bq2415x_device *bq)
+{
+	struct regulator_config cfg = { };
+
+	cfg.dev = bq->dev;
+	cfg.driver_data = bq;
+	cfg.of_node = bq->dev->of_node;
+
+	bq->usb_vbus_reg = devm_regulator_register(bq->dev, &bq2415x_vbus_desc,
+						   &cfg);
+	return PTR_ERR_OR_ZERO(bq->usb_vbus_reg);
+}
+#else
+static inline int bq2415x_register_vbus_regulator(struct bq2415x_device *bq)
+{
+	return 0;
+}
+#endif
 
 static bool bq2415x_update_reported_mode(struct bq2415x_device *bq, int mA)
 {
@@ -1655,6 +1723,16 @@ static int bq2415x_probe(struct i2c_client *client)
 		dev_err(bq->dev, "failed to set default values: %d\n", ret);
 		goto error_3;
 	}
+
+	/*
+	 * Expose the chip's boost mode as a USB OTG VBUS regulator so a USB
+	 * role switch (or TCPM) can source 5V on VBUS in host mode. Optional:
+	 * absent DT subnode just means no consumer, so don't fail probe.
+	 */
+	ret = bq2415x_register_vbus_regulator(bq);
+	if (ret)
+		dev_warn(bq->dev,
+			 "failed to register usb-otg-vbus regulator: %d\n", ret);
 
 	if (bq->notify_node || bq->init_data.notify_device) {
 		bq->nb.notifier_call = bq2415x_notifier_call;

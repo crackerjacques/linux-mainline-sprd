@@ -1357,6 +1357,21 @@ static int sc27xx_get_vbus_status(struct sc27xx_pd *pd)
 	bool vbus_present;
 	int ret;
 
+	/*
+	 * As a source, VBUS is supplied by the external charger's OTG boost,
+	 * which the PMIC's VBUS_OK comparator (TYPEC_DBG1 bit 8) does not sense
+	 * -- it only ever sees incoming VBUS when we are a sink. Polling it here
+	 * always times out (-110) and stalls the TCPM SRC state machine, so
+	 * trust the commanded VBUS state instead while attached as source.
+	 */
+	if (pd->state == SC27XX_ATTACHED_SRC) {
+		if (pd->vbus_on != pd->vbus_present) {
+			pd->vbus_present = pd->vbus_on;
+			tcpm_vbus_change(pd->tcpm_port);
+		}
+		return 0;
+	}
+
 	if (pd->typec_online) {
 		ret = regmap_read_poll_timeout(pd->regmap,
 					       pd->typec_base + SC27XX_TYPEC_DBG1,
@@ -1627,7 +1642,13 @@ static int sc27xx_pd_probe(struct platform_device *pdev)
 			regulator_disable(pd->vbus);
 	}
 
-	pd->vconn = devm_regulator_get_exclusive(pd->dev, "vconn");
+	/*
+	 * VCONN is only needed to power e-marked/active cables (Ra detection);
+	 * normal DRP host/device operation never enables it, and this board has
+	 * no VCONN switch. Use an optional get so an absent supply yields
+	 * -ENODEV (NULL) instead of a dummy that -EINVALs the exclusive request.
+	 */
+	pd->vconn = devm_regulator_get_optional(pd->dev, "vconn");
 	if (IS_ERR(pd->vconn)) {
 		ret = PTR_ERR(pd->vconn);
 		if (ret != -ENODEV) {
@@ -1636,8 +1657,8 @@ static int sc27xx_pd_probe(struct platform_device *pdev)
 		}
 		pd->vconn = NULL;
 	} else {
-		if (regulator_is_enabled(pd->vbus) > 0)
-			regulator_disable(pd->vbus);
+		if (regulator_is_enabled(pd->vconn) > 0)
+			regulator_disable(pd->vconn);
 	}
 
 	ret = devm_request_threaded_irq(pd->dev, pd_irq, NULL,

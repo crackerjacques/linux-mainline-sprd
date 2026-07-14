@@ -10,6 +10,7 @@
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
+#include <linux/regulator/consumer.h>
 #include <linux/usb/role.h>
 #include "musb_core.h"
 #include "sprd_dma.h"
@@ -22,12 +23,14 @@ struct sprd_glue {
 	struct clk *clk;
 	enum usb_role role;
 	struct usb_role_switch *role_sw;
+	struct regulator *vbus;
 };
 
 static int sprd_otg_switch_set(struct sprd_glue *glue, enum usb_role role)
 {
 	struct musb *musb = glue->musb;
 	u8 devctl;
+	int ret;
 
 	if (role == glue->role)
 		return 0;
@@ -42,10 +45,23 @@ static int sprd_otg_switch_set(struct sprd_glue *glue, enum usb_role role)
 		phy_power_off(glue->phy);
 		/* wait for disconnect event */
 		msleep(20);
+		/* drop VBUS if we were sourcing it as host */
+		if (glue->role == USB_ROLE_HOST && glue->vbus)
+			regulator_disable(glue->vbus);
 	}
 
 	switch (role) {
 	case USB_ROLE_HOST:
+		/*
+		 * No TCPM on this board, so the role switch is what turns on
+		 * VBUS: enable the charger's OTG boost regulator to source 5V.
+		 */
+		if (glue->vbus) {
+			ret = regulator_enable(glue->vbus);
+			if (ret)
+				dev_err(glue->dev,
+					"failed to enable vbus: %d\n", ret);
+		}
 		musb->is_active = 1;
 		musb_set_state(musb, OTG_STATE_A_IDLE);
 		MUSB_HST_MODE(musb);
@@ -310,6 +326,18 @@ static int sprd_musb_probe(struct platform_device *pdev)
 	if (IS_ERR(glue->phy)) {
 		return dev_err_probe(dev, PTR_ERR(glue->phy),
 			"failed to get phy\n");
+	}
+
+	/*
+	 * Optional VBUS supply for host mode. On boards with a TCPM the PD
+	 * block drives VBUS instead, so absence is not an error.
+	 */
+	glue->vbus = devm_regulator_get_optional(dev, "vbus");
+	if (IS_ERR(glue->vbus)) {
+		ret = PTR_ERR(glue->vbus);
+		if (ret == -EPROBE_DEFER)
+			return dev_err_probe(dev, ret, "failed to get vbus\n");
+		glue->vbus = NULL;
 	}
 
 	platform_set_drvdata(pdev, glue);

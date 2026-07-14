@@ -685,6 +685,48 @@
 &usb {
 	status = "okay";
 	dr_mode = "otg";
+	usb-role-switch;
+	role-switch-default-mode = "peripheral";
+
+	/*
+	 * OF-graph link to the PMIC Type-C port manager (sc27xx_pd). CC-based
+	 * attach/detach drives this role switch; VBUS is owned by the TCPM
+	 * (vbus-supply lives on &pmic_typec_pd, not here) so its exclusive
+	 * regulator request doesn't collide with the musb glue.
+	 */
+	port {
+		usb_hs_ep: endpoint {
+			remote-endpoint = <&tcpc_hs_ep>;
+		};
+	};
+};
+
+&pmic_typec_pd {
+	status = "okay";
+	/* charger OTG boost, sourced on host attach by the TCPM */
+	vbus-supply = <&usb_otg_vbus>;
+
+	connector {
+		compatible = "usb-c-connector";
+		label = "USB-C";
+		power-role = "dual";
+		data-role = "dual";
+		try-power-role = "sink";
+		/*
+		 * CC-based OTG role detection only, no USB-PD. Skips the
+		 * source/sink-pdo requirement that -EINVALs tcpm_register_port
+		 * for a PD-capable port; DRP toggling, VBUS sourcing and the
+		 * role switch all still work.
+		 */
+		pd-disable;
+		typec-power-opmode = "default";
+
+		port {
+			tcpc_hs_ep: endpoint {
+				remote-endpoint = <&usb_hs_ep>;
+			};
+		};
+	};
 };
 
 &gpu {
@@ -759,7 +801,7 @@
 	#address-cells = <1>;
 	#size-cells = <0>;
 
-	sc2730_charger: charger@6a {
+	charger: charger@6a {
 		compatible = "ti,bq24158";
 		reg = <0x6a>;
 		ti,current-limit = <1800>;
@@ -768,6 +810,10 @@
 		ti,charge-current = <2000>;
 		ti,termination-current = <200>;
 		ti,resistor-sense = <33>;
+
+		usb_otg_vbus: usb-otg-vbus {
+			regulator-name = "usb-otg-vbus";
+		};
 	};
 };
 

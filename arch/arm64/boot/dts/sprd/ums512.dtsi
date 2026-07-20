@@ -437,12 +437,6 @@
 
 	audcp_boot: audcp-boot {
 		compatible = "sprd,ums512-audcp-boot";
-		/*
-		 * Stock omits dsp-reboot-mode (= mode 0, "dsp reboot by
-		 * DDR"): the boot vector MUST be written, since we cold-load
-		 * the firmware into DDR ourselves. Mode 1 skips the vector
-		 * write and the DSP never executes the image.
-		 */
 		dsp-reboot-mode = <0>;
 		sysshutdown = <&pmu_apb_regs 0x0060 0x02000000>;
 		coreshutdown = <&pmu_apb_regs 0x005c 0x01000000>;
@@ -460,7 +454,7 @@
 		memory-region = <&audiodsp_reserved>, <&audio_reserved>;
 		sprd,audcp-aon-iram = <&audcp_iram_reserved>;
 		#power-domain-cells = <0>;
-		status = "okay";
+		status = "disabled";
 	};
 
 	/* AON IRAM window shared with the audio DSP (stock audcp-iram@a400) */
@@ -1219,10 +1213,9 @@
 			};
 
 			agcp_dma: dma-controller@33580000 {
-				compatible = "sprd,sharkl5pro-dma",
-					     "sprd,sc9860-dma";
+				compatible = "sprd,sharkl5pro-dma", "sprd,sc9860-dma";
 				reg = <0 0x33580000 0 0x4000>;
-				interrupts = <GIC_SPI 180 IRQ_TYPE_LEVEL_HIGH>;
+				interrupts = <GIC_SPI 181 IRQ_TYPE_LEVEL_HIGH>;
 				power-domains = <&audcp_boot>;
 				#dma-cells = <1>;
 				dma-channels = <32>;
@@ -1361,7 +1354,7 @@
 
 		ap_dma: dma-controller@20000000 {
 			/* AP-owned DMA (GIC_SPI 24) used by the i2s0 audio path;
-			 * distinct from the audcp agcp_dma whose IRQ is dead.
+			 * distinct from the audcp agcp_dma.
 			 */
 			compatible = "sprd,sharkl5pro-dma", "sprd,sc9860-dma";
 			reg = <0 0x20000000 0 0x4000>;

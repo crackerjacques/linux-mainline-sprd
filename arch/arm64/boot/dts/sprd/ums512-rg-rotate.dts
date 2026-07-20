@@ -33,16 +33,6 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 		stdout-path = "serial1:115200n8";
-
-		framebuffer0: framebuffer@9e000000 {
-			compatible = "simple-framebuffer";
-			memory-region = <&framebuffer_region>;
-			width = <720>;
-			height = <720>;
-			stride = <(720 * 4)>;
-			format = "a8r8g8b8";
-			status = "disabled";
-		};
 	};
 
 	reserved-memory {
@@ -50,12 +40,12 @@
 		#size-cells = <2>;
 		ranges;
 
-		framebuffer_region: framebuffer-region@9e000000 {
-			compatible = "framebuffer";
-			reg = <0 0x9e000000 0 (720 * 720 * 4)>;
-			iommu-addresses = <&dpu 0x9e000000 (720 * 720 * 4)>;
-			no-map;
-		};
+        framebuffer_region: framebuffer-region@9e000000 {
+            compatible = "framebuffer";
+            reg = <0 0x9e000000 0 (720 * 720 * 4)>;
+            iommu-addresses = <&dpu 0x9e000000 (720 * 720 * 4)>;
+            no-map;
+        };
 
 		linux,cma {
 			compatible = "shared-dma-pool";
@@ -88,11 +78,6 @@
 		regulator-boot-on;
 	};
 
-	/*
-	 * Touch panel power. Stock exposes this as a raw vcc-gpios line on the
-	 * goodix node (ap_gpio 16); mainline goodix.c wants a regulator, not a
-	 * GPIO toggle, so it's wrapped as a fixed regulator instead.
-	 */
 	touch_vdd: regulator-touch-vdd {
 		compatible = "regulator-fixed";
 		regulator-name = "touch-vdd";
@@ -101,24 +86,11 @@
 		regulator-boot-on;
 	};
 
-	/*
-	 * Gamepad. Stock uses the out-of-tree "singleadc-joypad" driver, which
-	 * bundled these GPIO buttons with an ADC stick path (6-way amux +
-	 * adc-power-ctl). This SKU is stickless, so the ADC path is inert and
-	 * every real input is a discrete &ap_gpio line -> plain gpio-keys.
-	 *
-	 * D-pad: stock encodes it as shared ABS_HAT0X/Y hats. gpio-keys' EV_ABS
-	 * path only fires on press and never recenters on release, so the hats
-	 * are remapped to discrete BTN_DPAD_* keys (frontends read these as a
-	 * hat). GPIO numbers are the stock overlay_1 hex offsets in decimal;
-	 * stock flag 0x01 = GPIO_ACTIVE_LOW.
-	 */
 	gamepad_keys: gpio-keys-gamepad {
 		compatible = "gpio-keys";
 		pinctrl-names = "default";
 		pinctrl-0 = <&joypad_pins_func &joypad_pins_misc>;
 
-		/* D-pad */
 		btn-dpad-up {
 			label = "DPAD-UP";
 			linux,code = <BTN_DPAD_UP>;
@@ -143,8 +115,6 @@
 			gpios = <&ap_gpio 86 GPIO_ACTIVE_LOW>;
 			debounce-interval = <2>;
 		};
-
-		/* Face buttons */
 		btn-a {
 			label = "BTN-A";
 			linux,code = <BTN_SOUTH>;
@@ -195,14 +165,6 @@
 			gpios = <&ap_gpio 2 GPIO_ACTIVE_LOW>;
 			debounce-interval = <2>;
 		};
-
-		/*
-		 * No thumb-stick clicks: this SKU has no sticks, so the stock
-		 * BTN_THUMBL/THUMBR on ap_gpio 20/23 (RFCTL1/RFCTL4) are absent
-		 * physical buttons — omitted, and their pads left un-muxed.
-		 */
-
-		/* Start / Select / hotkeys */
 		btn-select {
 			label = "BTN-SELECT";
 			linux,code = <BTN_SELECT>;
@@ -235,11 +197,6 @@
 		};
 	};
 
-	/*
-	 * Volume keys — separate node so autorepeat (hold-to-repeat) applies
-	 * here but NOT to power/hall below. Vol-down is active-HIGH and on the
-	 * PMIC EIC; vol-up is active-low on ap_gpio (stock overlay_1 wiring).
-	 */
 	volume_keys: gpio-keys-volume {
 		compatible = "gpio-keys";
 		autorepeat;
@@ -262,7 +219,6 @@
 		};
 	};
 
-	/* Power button (PMIC EIC). No autorepeat. */
 	sys_keys: gpio-keys-system {
 		compatible = "gpio-keys";
 
@@ -275,15 +231,6 @@
 		};
 	};
 
-	/*
-	 * Hall swivel sensor on ap_gpio 54 (= SPI2_DI, an alternate-func pad that
-	 * needs func4 like the buttons — see hall_pin_func/misc). Per the actual
-	 * firmware dtbo; the eic_debounce line 15 in an older decompiled overlay
-	 * was a mismatched variant. Modelled as EV_SW, not a key: the screen
-	 * rotates, so userspace wants a persistent orientation state, not a
-	 * keypress. gpio-keys reports the level on every edge (and the initial
-	 * state at probe), so SW_TABLET_MODE holds a constant bool.
-	 */
 	hall_switch: gpio-keys-hall {
 		compatible = "gpio-keys";
 		pinctrl-names = "default";
@@ -388,7 +335,6 @@
 	label = "yellow";
 };
 
-/* SC2730 fuel gauge — battery voltage / capacity reporting. */
 &sc2730_fgu {
 	status = "okay";
 	monitored-battery = <&bat>;
@@ -403,12 +349,12 @@
 	digital-codec = <&sprd_audio_codec_dig>;
 };
 
+&audcp_boot {
+	status = "okay";
+};
+
 &sound_vbc_v4_sprd_codec {
 	status = "okay";
-	/*
-	 * Stock Android drives speaker playback through the codec HP path, not
-	 * the SC2730 class-D SPK pin, so route Ext Spk/Ext Spk1 to HP Pin only.
-	 */
 	sprd-audio-card,routing =
 		"Ext Spk", "HP Pin",
 		"Ext Spk1", "HP Pin";
@@ -434,14 +380,6 @@
         function = "func4";
     };
 
-	/*
-	 * Gamepad buttons whose pads default to a non-GPIO function. The 8
-	 * buttons on dedicated GPIOnnn pads work without muxing; these 11 sit on
-	 * RF/IIS3/KEYIN pads that need func4 (= GPIO, the u-boot pinmap's 0x30)
-	 * plus input-enable and a pull-up (active-low buttons). Mirrors what
-	 * gpio_pin_set() does in board/spreadtrum/ums512_1h10/gpio_pin.c.
-	 * Referenced from the gamepad_keys node.
-	 */
 	joypad_pins_func: joypad-pins-func {
 		pins = "UMS512_RFSDA0", "UMS512_RFSCK0", "UMS512_RFSEN0",
 		       "UMS512_RFSEN1", "UMS512_RFCTL6", "UMS512_RFCTL7",
@@ -459,7 +397,6 @@
 		bias-pull-up = <20000>;
 	};
 
-	/* Vol-up sits on ap_gpio 30 = RFCTL11, another alternate-func pad. */
 	volup_pin_func: volup-pin-func {
 		pins = "UMS512_RFCTL11";
 		function = "func4";
@@ -471,7 +408,6 @@
 		bias-pull-up = <20000>;
 	};
 
-	/* Hall sensor sits on ap_gpio 54 = SPI2_DI, another alternate-func pad. */
 	hall_pin_func: hall-pin-func {
 		pins = "UMS512_SPI2_DI";
 		function = "func4";
@@ -688,12 +624,6 @@
 	usb-role-switch;
 	role-switch-default-mode = "peripheral";
 
-	/*
-	 * OF-graph link to the PMIC Type-C port manager (sc27xx_pd). CC-based
-	 * attach/detach drives this role switch; VBUS is owned by the TCPM
-	 * (vbus-supply lives on &pmic_typec_pd, not here) so its exclusive
-	 * regulator request doesn't collide with the musb glue.
-	 */
 	port {
 		usb_hs_ep: endpoint {
 			remote-endpoint = <&tcpc_hs_ep>;
@@ -703,7 +633,6 @@
 
 &pmic_typec_pd {
 	status = "okay";
-	/* charger OTG boost, sourced on host attach by the TCPM */
 	vbus-supply = <&usb_otg_vbus>;
 
 	connector {
@@ -712,12 +641,6 @@
 		power-role = "dual";
 		data-role = "dual";
 		try-power-role = "sink";
-		/*
-		 * CC-based OTG role detection only, no USB-PD. Skips the
-		 * source/sink-pdo requirement that -EINVALs tcpm_register_port
-		 * for a PD-capable port; DRP toggling, VBUS sourcing and the
-		 * role switch all still work.
-		 */
 		pd-disable;
 		typec-power-opmode = "default";
 
@@ -760,14 +683,6 @@
 	};
 };
 
-/*
- * Touchscreen. Stock uses a Goodix GT911 (paired with the lcd_gt911_mipi_ab021
- * panel; 186-byte cfg-group0 matches the smaller GT911-class config) behind
- * the generic "goodix,gt9xx" downstream driver on i2c3. Config is read back
- * from the chip over i2c by the mainline driver, so the vendor cfg-group0
- * blob and all goodix,* tuning props are dropped; only irq/reset gpios and a
- * supply are needed.
- */
 &i2c3 {
 	status = "okay";
 	clock-frequency = <400000>;
@@ -788,11 +703,6 @@
 	};
 };
 
-/*
- * Battery charger. Stock uses an AW32257 (Awinic) at i2c4 0x6a, a register
- * clone of the TI bq24157/bq24158. Values have been translated from the
- * stock dtbo overlay (charger@6a) to bq2415x units.
- */
 &i2c4 {
 	status = "okay";
 	clock-frequency = <400000>;
@@ -834,7 +744,7 @@
 };
 
 &sdio3 {
-	status = "disabled";
+	status = "okay";
 	vmmc-supply = <&vddemmccore>;
 	bus-width = <8>;
 	voltage-ranges = <3000 3000>;
@@ -853,12 +763,6 @@
 	no-sd;
 };
 
-/*
- * Wi-Fi/BT/FM/GNSS: external Unisoc Marlin3-Lite (SC2355) WCN combo on the
- * SDIO1 controller (0x71200000). The marlin core powers the chip (enable/reset
- * GPIOs + regulators), downloads firmware over SDIO, then triggers a card
- * rescan on sdio1 via the extcon link so the SDIO function enumerates.
- */
 &sdio1 {
 	status = "okay";
 	bus-width = <4>;
@@ -874,14 +778,6 @@
 	sprd_marlin3: sprd-marlin3 {
 		compatible = "unisoc,marlin3lite_sdio";
 
-		/*
-		 * &ap_gpio pins from the stock RG Rotate dtbo (overlay_1, the
-		 * joypad variant): enable 143, reset 95, m2-wakeup-ap 33,
-		 * m2-to-ap-irq 94. m2-wakeup-ap is the SDIO RX data-ready line
-		 * sdiohal takes its interrupt from, so it MUST be correct or no
-		 * received packet is ever delivered. (The camera variant
-		 * overlay_0 uses 97/32/96 - do not use those here.)
-		 */
 		enable-gpios = <&ap_gpio 143 GPIO_ACTIVE_LOW>;
 		reset-gpios = <&ap_gpio 95 GPIO_ACTIVE_LOW>;
 		m2-wakeup-ap-gpios = <&ap_gpio 33 GPIO_ACTIVE_LOW>;
@@ -896,11 +792,6 @@
 		extcon = <&sdio1>;
 		sdhci-name = <&sdio1>;
 
-		/*
-		 * Primary firmware path is request_firmware("wcnmodem.bin") from
-		 * /lib/firmware. These file-name properties are the partition/direct
-		 * fallback if request_firmware fails.
-		 */
 		sprd,btwf-file-name = "/lib/firmware/wcnmodem.bin";
 		sprd,gnss-file-name = "/lib/firmware/gnssmodem.bin";
 
@@ -916,22 +807,8 @@
 			compatible = "sprd,sc2355-sdio-wifi";
 		};
 
-		gnss {
-			compatible = "sprd,gnss";
-		};
-
 		sprd-mtty {
 			compatible = "sprd,mtty";
-			/*
-			 * btsprdsdio derives a stable, per-unit locally-
-			 * administered BD address from the SoC's 64-bit die UID
-			 * (efuse@800 uid-start/uid-end) and sets it via
-			 * set_bdaddr() during setup. This also marks the
-			 * controller configured; without a valid address hci0
-			 * comes up HCI_UNCONFIGURED and "hciconfig hci0 up"
-			 * returns EOPNOTSUPP. An optional "local-bd-address"
-			 * property here still overrides the derived address.
-			 */
 			nvmem-cells = <&uid_start>, <&uid_end>;
 			nvmem-cell-names = "uid-start", "uid-end";
 		};

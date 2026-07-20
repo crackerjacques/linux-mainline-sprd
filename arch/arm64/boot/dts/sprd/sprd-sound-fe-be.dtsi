@@ -1122,10 +1122,9 @@
 
 	/*
 	 * AP-side i2s0 playback/capture path. Unlike the VBC card above
-	 * (which rides the audcp agcp_dma whose completion IRQ never
-	 * reaches the AP), this uses the AP-owned ap_dma, so DMA period
-	 * interrupts are expected to work natively. Disabled by default;
-	 * the board dts enables ap_dma, i2s0 and this card.
+	 * (which rides the audcp agcp_dma), this uses the AP-owned ap_dma.
+	 * Disabled by default; the board dts enables ap_dma, i2s0 and this
+	 * card.
 	 */
 	sprd_pcm_iis: sprd-pcm-iis {
 		compatible = "unisoc,sharkl5-pcm-platform";

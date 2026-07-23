@@ -103,13 +103,18 @@ static const struct ieee80211_txrx_stypes sc23xx_mgmt_stypes[NUM_NL80211_IFTYPES
 	},
 };
 
-#ifdef CONFIG_PM
-
-static const struct wiphy_wowlan_support sc23xx_wowlan_support = {
-	.flags = WIPHY_WOWLAN_ANY,
-};
-
-static int sc23xx_set_suspend(struct sc23xx_dev *sdev, bool suspend)
+/*
+ * System suspend/resume for WiFi is NOT driven through cfg80211's wiphy
+ * .suspend/.resume. The wiphy's parent is a platform_device, while the SDIO
+ * bus (sdiohal) hangs off an sdio_func under the mmc host, so the two are
+ * unordered in the dpm list: cfg80211 would try to send the suspend command
+ * *after* sdiohal has already quiesced the bus, and it times out (-110).
+ *
+ * Instead the suspend/resume handshake is issued from the sdiohal
+ * power_notify callback (see sc23xx_sdio_power_notify in sdio.c), which runs
+ * inside sdiohal_suspend() while the bus is still up.
+ */
+int sc23xx_set_suspend(struct sc23xx_dev *sdev, bool suspend)
 {
 	struct sc23xx_vif *vif;
 	int ret = 0, srcu_idx, i;
@@ -126,24 +131,6 @@ static int sc23xx_set_suspend(struct sc23xx_dev *sdev, bool suspend)
 
 	return ret;
 }
-
-static int sc23xx_suspend(struct wiphy *wiphy, struct cfg80211_wowlan *wow)
-{
-	struct sc23xx_dev *sdev = wiphy_priv(wiphy);
-
-	wiphy_dbg(wiphy, "WoWLAN requested: %s\n", wow ? "yes" : "no");
-
-	return sc23xx_set_suspend(sdev, true);
-}
-
-static int sc23xx_resume(struct wiphy *wiphy)
-{
-	struct sc23xx_dev *sdev = wiphy_priv(wiphy);
-
-	return sc23xx_set_suspend(sdev, false);
-}
-
-#endif /* CONFIG_PM */
 
 static int sc23xx_scan(struct wiphy *wiphy, struct cfg80211_scan_request *request)
 {
@@ -323,10 +310,10 @@ static int sc23xx_sched_scan_stop(struct wiphy *wiphy, struct net_device *ndev,
 }
 
 static const struct cfg80211_ops sc23xx_ops = {
-#ifdef CONFIG_PM
-	.suspend = sc23xx_suspend,
-	.resume = sc23xx_resume,
-#endif
+	/*
+	 * No .suspend/.resume: system suspend is handled via the sdiohal
+	 * power_notify callback instead (see sc23xx_set_suspend).
+	 */
 	.scan = sc23xx_scan,
 	.abort_scan = sc23xx_abort_scan,
 	.connect = sc23xx_connect,
@@ -460,9 +447,6 @@ void *sc23xx_alloc_device(struct device *dev, size_t size,
 	wiphy->signal_type = CFG80211_SIGNAL_TYPE_MBM;
 	wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION) | BIT(NL80211_IFTYPE_AP);
 	wiphy->mgmt_stypes = sc23xx_mgmt_stypes;
-#ifdef CONFIG_PM
-	wiphy->wowlan = &sc23xx_wowlan_support;
-#endif
 	wiphy->reg_notifier = sc23xx_reg_notify;
 	wiphy->regulatory_flags |= REGULATORY_DISABLE_BEACON_HINTS;
 

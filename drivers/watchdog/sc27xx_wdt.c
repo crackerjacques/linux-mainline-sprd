@@ -218,6 +218,37 @@ static int sc27xx_wdt_probe(struct platform_device *pdev)
 	return devm_watchdog_register_device(dev, &wdt->wdd);
 }
 
+static int __maybe_unused sc27xx_wdt_pm_suspend(struct device *dev)
+{
+	struct sc27xx_wdt *wdt = dev_get_drvdata(dev);
+
+	/*
+	 * Stop the counter across system suspend. Userspace (e.g. systemd's
+	 * RuntimeWatchdog) can no longer ping it while frozen, so a free-running
+	 * PMIC watchdog would fire and reset the SoC part-way through a long
+	 * sleep. The SoC-side sprd_wdt already does the same.
+	 */
+	if (watchdog_active(&wdt->wdd))
+		sc27xx_wdt_stop(&wdt->wdd);
+
+	return 0;
+}
+
+static int __maybe_unused sc27xx_wdt_pm_resume(struct device *dev)
+{
+	struct sc27xx_wdt *wdt = dev_get_drvdata(dev);
+
+	if (watchdog_active(&wdt->wdd))
+		return sc27xx_wdt_start(&wdt->wdd);
+
+	return 0;
+}
+
+static const struct dev_pm_ops sc27xx_wdt_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(sc27xx_wdt_pm_suspend,
+				sc27xx_wdt_pm_resume)
+};
+
 static const struct of_device_id sc27xx_wdt_of_match[] = {
 	{ .compatible = "sprd,sc2730-wdt", },
 	{ .compatible = "sprd,sc27xx-wdt", },
@@ -230,6 +261,7 @@ static struct platform_driver sc27xx_wdt_driver = {
 	.driver = {
 		.name = "sc27xx-wdt",
 		.of_match_table = sc27xx_wdt_of_match,
+		.pm = &sc27xx_wdt_pm_ops,
 	},
 };
 module_platform_driver(sc27xx_wdt_driver);

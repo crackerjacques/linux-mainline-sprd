@@ -396,6 +396,34 @@ out:
 	return 0;
 }
 
+/*
+ * sdiohal power_notify: called from sdiohal_suspend()/sdiohal_resume() while
+ * the SDIO bus is still up. This is where we issue the firmware suspend/resume
+ * handshake, rather than from cfg80211's wiphy .suspend (which the dpm order
+ * runs only *after* the bus has been quiesced — the command then times out).
+ *
+ * sdiohal calls power_notify(chn, false) to suspend and power_notify(chn, true)
+ * to resume. A non-zero return from the suspend call aborts the suspend and
+ * makes sdiohal roll the bus back up via its power_notify: unwind path.
+ */
+static int sc23xx_sdio_power_notify(int chn, int notify)
+{
+	struct sc23xx_sdio *priv = sc23xx_sdio_priv;
+	bool suspend = !notify;
+	int ret;
+
+	if (!priv)
+		return 0;
+
+	ret = sc23xx_set_suspend(&priv->sdev, suspend);
+	if (ret)
+		dev_warn(&priv->pdev->dev,
+			 "chn %d %s handshake failed: %d\n", chn,
+			 suspend ? "suspend" : "resume", ret);
+
+	return ret;
+}
+
 static struct mchn_ops_t sc23xx_sdio_chn_ops[] = {
 	{
 		.hif_type = HW_TYPE_SDIO,
@@ -428,6 +456,12 @@ static struct mchn_ops_t sc23xx_sdio_chn_ops[] = {
 		.pool_size = 10,
 		.buf_size = SC23XX_SDIO_MAX_CMD_LEN,
 		.pop_link = sc23xx_sdio_tx_pop,
+		/*
+		 * Drive the firmware suspend/resume handshake from the TX cmd
+		 * channel: sdiohal invokes power_notify per channel, and this
+		 * is the port the CMD_POWER_SAVE command is written on anyway.
+		 */
+		.power_notify = sc23xx_sdio_power_notify,
 	},
 	{
 		.hif_type = HW_TYPE_SDIO,

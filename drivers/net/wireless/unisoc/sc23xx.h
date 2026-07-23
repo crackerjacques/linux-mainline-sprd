@@ -198,6 +198,8 @@ static inline u16 sc23xx_tx_seq_info(struct sc23xx_dev *sdev, int color)
 int sc23xx_register_device(struct sc23xx_dev *sdev);
 void sc23xx_unregister_device(struct sc23xx_dev *sdev);
 
+int sc23xx_set_suspend(struct sc23xx_dev *sdev, bool suspend);
+
 void sc23xx_wakeup_fw(struct sc23xx_dev *sdev);
 
 void sc23xx_rx_msg(struct sc23xx_dev *sdev, enum sc23xx_msg_type type,

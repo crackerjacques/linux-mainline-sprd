@@ -1277,12 +1277,15 @@
 				     <GIC_SPI 60 IRQ_TYPE_LEVEL_HIGH>,
 				     <GIC_SPI 60 IRQ_TYPE_LEVEL_HIGH>;
 			interrupt-names = "job", "mmu", "gpu";
-			clocks = <&gpu_clk CLK_GPU_CORE_EB>,
+			clocks = <&gpu_clk CLK_GPU_CORE>,
+				 <&gpu_clk CLK_GPU_CORE_EB>,
 				 <&gpu_clk CLK_GPU_MEM_EB>,
 				 <&gpu_clk CLK_GPU_SYS_EB>;
-			clock-names = "gpu", "mem", "bus";
+			clock-names = "core", "gpu", "mem", "bus";
+			assigned-clocks = <&pll2 CLK_GPLL>;
+			assigned-clock-rates = <850000000>;
 			power-domains = <&pmu UMS512_POWER_DOMAIN_GPU_TOP>;
-			resets = <&gpu_clk RESET_GPU_APB_SYS_SOFT_RST_REQ_CORE>;
+			resets = <&gpu_clk RESET_GPU_APB_GPU_CORE_SOFT_RST>;
 			operating-points-v2 = <&gpu_opp_table>;
 
 			status = "disabled";

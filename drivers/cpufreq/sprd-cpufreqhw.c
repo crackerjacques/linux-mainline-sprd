@@ -263,6 +263,39 @@ free_np:
 	return ret;
 }
 
+/*
+ * Mark every possible CPU that references the same cpufreq-data-v1 phandle
+ * (i.e. shares this cluster's clock/power domain) in @cpus. This is derived
+ * purely from the DT and so is independent of which CPUs happen to be online
+ * right now -- unlike topology_cluster_cpumask(), whose sibling bits are only
+ * populated as each CPU comes online. During resume the non-boot CPUs are
+ * brought up one at a time, so using the online-dependent topology mask makes
+ * the first big core create a policy with related_cpus covering only itself;
+ * when the second core then comes online cpufreq_online() trips
+ * WARN_ON(!cpumask_test_cpu(cpu, policy->related_cpus)).
+ */
+static void sprd_cpufreq_get_sharing_cpus(struct device_node *cpufreq_of_node,
+					  struct cpumask *cpus)
+{
+	struct device_node *cpu_np, *sib_np;
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		cpu_np = of_cpu_device_node_get(cpu);
+		if (!cpu_np)
+			continue;
+
+		sib_np = of_parse_phandle(cpu_np, "cpufreq-data-v1", 0);
+		of_node_put(cpu_np);
+		if (!sib_np)
+			continue;
+
+		if (sib_np == cpufreq_of_node)
+			cpumask_set_cpu(cpu, cpus);
+		of_node_put(sib_np);
+	}
+}
+
 static int sprd_hardware_cpufreq_init(struct cpufreq_policy *policy)
 {
 	struct cpufreq_frequency_table *freq_table;
@@ -367,9 +400,13 @@ static int sprd_hardware_cpufreq_init(struct cpufreq_policy *policy)
 	policy->freq_table = freq_table;
 
 #ifdef CONFIG_SMP
-	/* CPUs in the same cluster share a clock and power domain */
-	cpumask_or(policy->cpus, policy->cpus,
-		   topology_cluster_cpumask(policy->cpu));
+	/*
+	 * CPUs in the same cluster share a clock and power domain. Derive the
+	 * sharing mask from the DT (cpufreq-data-v1 phandle) rather than the
+	 * online-dependent topology mask, so related_cpus is complete even when
+	 * sibling cores are still offline (e.g. during resume bring-up).
+	 */
+	sprd_cpufreq_get_sharing_cpus(cpufreq_of_node, policy->cpus);
 #endif
 
 	if (!cpufreq_datas[data->cluster])

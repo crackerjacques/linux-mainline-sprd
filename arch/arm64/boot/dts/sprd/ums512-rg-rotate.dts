@@ -338,6 +338,7 @@
 &sc2730_fgu {
 	status = "okay";
 	monitored-battery = <&bat>;
+	power-supplies = <&charger>;
 	sprd,calib-resistance-micro-ohms = <10000>;
 };
 

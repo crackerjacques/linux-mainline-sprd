@@ -1750,7 +1750,8 @@ static const struct clk_parent_data gpu_parents[] = {
 	{ .hw = &gpll.common.hw  },
 };
 
-static SPRD_COMP_CLK_DATA(gpu_core_clk, "gpu-core-clk", gpu_parents,
+/* Reparent-capable: GPU DVFS OPPs live on different parent PLLs. */
+static SPRD_COMP_CLK_DATA_REPARENT(gpu_core_clk, "gpu-core-clk", gpu_parents,
 			  0x4, 4, 3, 8, 3, 0);
 
 static SPRD_GATE_CLK_HW(gpu_mem_gate, "gpu-mem-gate", &gpu_eb.common.hw,

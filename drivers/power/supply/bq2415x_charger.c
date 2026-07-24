@@ -90,6 +90,22 @@
 #define BQ2415X_MASK_VI_TERM		(BIT(0)|BIT(1)|BIT(2))
 #define BQ2415X_SHIFT_VI_TERM		0
 
+/* AW32257 current register differences. */
+#define AW32257_MASK_VI_CHRG		(BIT(3)|BIT(4)|BIT(5)|BIT(6))
+#define AW32257_SHIFT_VI_CHRG		3
+
+static const int aw32257_ichg_uv[16] = {
+	16368, 20460, 28644, 32736, 36828, 40920, 45012, 49104,
+	53196, 57288, 61380, 65472, 69564, 73656, 77748, 81840,
+};
+
+/* Termination current, REG04[2:0]: 2046 uV base, then 2046/4092/8184 by bit. */
+static int aw32257_iterm_uv(int code)
+{
+	return 2046 + 2046 * (code & 1) + 4092 * ((code >> 1) & 1) +
+	       8184 * ((code >> 2) & 1);
+}
+
 
 enum bq2415x_command {
 	BQ2415X_TIMER_RESET,
@@ -140,6 +156,7 @@ enum bq2415x_chip {
 	BQ24156A,
 	BQ24157S,
 	BQ24158,
+	AW32257,
 };
 
 static char *bq2415x_chip_name[] = {
@@ -156,6 +173,7 @@ static char *bq2415x_chip_name[] = {
 	"bq24156a",
 	"bq24157s",
 	"bq24158",
+	"aw32257",
 };
 
 struct bq2415x_device {
@@ -172,6 +190,12 @@ struct bq2415x_device {
 	const char *timer_error;
 	char *model;
 	char *name;
+	/* Charge temperature guard; see bq2415x_temp_work(). */
+	struct delayed_work temp_work;
+	struct power_supply *fuel_gauge;
+	int temp_min;		/* deci-celsius, INT_MIN if unconstrained */
+	int temp_max;		/* deci-celsius, INT_MAX if unconstrained */
+	bool temp_blocked;	/* charging currently inhibited on temperature */
 	int autotimer;	/* 1 - if driver automatically reset timer, 0 - not */
 	int automode;	/* 1 - enabled, 0 - disabled; -1 - not supported */
 	int charge_status;
@@ -444,7 +468,7 @@ static enum bq2415x_chip bq2415x_detect_chip(struct bq2415x_device *bq)
 				return bq->chip;
 			return BQ24156;
 		case 2:
-			if (bq->chip == BQ24157S)
+			if (bq->chip == BQ24157S || bq->chip == AW32257)
 				return bq->chip;
 			return BQ24158;
 		default:
@@ -528,6 +552,10 @@ static int bq2415x_set_current_limit(struct bq2415x_device *bq, int mA)
 {
 	int val;
 
+	/* REG01[7:6] does not exist on the AW32257 */
+	if (bq->chip == AW32257)
+		return 0;
+
 	if (mA <= 100)
 		val = 0;
 	else if (mA <= 500)
@@ -565,6 +593,10 @@ static int bq2415x_get_current_limit(struct bq2415x_device *bq)
 static int bq2415x_set_weak_battery_voltage(struct bq2415x_device *bq, int mV)
 {
 	int val;
+
+	/* REG01[5:4] does not exist on the AW32257; VSHORT is fixed at 2.1V. */
+	if (bq->chip == AW32257)
+		return 0;
 
 	/* round to 100mV */
 	if (mV <= 3400 + 50)
@@ -630,6 +662,19 @@ static int bq2415x_set_charge_current(struct bq2415x_device *bq, int mA)
 	if (bq->init_data.resistor_sense <= 0)
 		return -EINVAL;
 
+	if (bq->chip == AW32257) {
+		int uv = mA * bq->init_data.resistor_sense;
+
+		/* Highest code that does not exceed the requested current. */
+		for (val = ARRAY_SIZE(aw32257_ichg_uv) - 1; val > 0; val--)
+			if (aw32257_ichg_uv[val] <= uv)
+				break;
+
+		return bq2415x_i2c_write_mask(bq, BQ2415X_REG_CURRENT, val,
+				AW32257_MASK_VI_CHRG | BQ2415X_MASK_RESET,
+				AW32257_SHIFT_VI_CHRG);
+	}
+
 	val = (mA * bq->init_data.resistor_sense - 37400) / 6800;
 	if (val < 0)
 		val = 0;
@@ -649,6 +694,14 @@ static int bq2415x_get_charge_current(struct bq2415x_device *bq)
 	if (bq->init_data.resistor_sense <= 0)
 		return -EINVAL;
 
+	if (bq->chip == AW32257) {
+		ret = bq2415x_i2c_read_mask(bq, BQ2415X_REG_CURRENT,
+				AW32257_MASK_VI_CHRG, AW32257_SHIFT_VI_CHRG);
+		if (ret < 0)
+			return ret;
+		return aw32257_ichg_uv[ret] / bq->init_data.resistor_sense;
+	}
+
 	ret = bq2415x_i2c_read_mask(bq, BQ2415X_REG_CURRENT,
 			BQ2415X_MASK_VI_CHRG, BQ2415X_SHIFT_VI_CHRG);
 	if (ret < 0)
@@ -663,6 +716,18 @@ static int bq2415x_set_termination_current(struct bq2415x_device *bq, int mA)
 
 	if (bq->init_data.resistor_sense <= 0)
 		return -EINVAL;
+
+	if (bq->chip == AW32257) {
+		int uv = mA * bq->init_data.resistor_sense;
+
+		for (val = 7; val > 0; val--)
+			if (aw32257_iterm_uv(val) <= uv)
+				break;
+
+		return bq2415x_i2c_write_mask(bq, BQ2415X_REG_CURRENT, val,
+				BQ2415X_MASK_VI_TERM | BQ2415X_MASK_RESET,
+				BQ2415X_SHIFT_VI_TERM);
+	}
 
 	val = (mA * bq->init_data.resistor_sense - 3400) / 3400;
 	if (val < 0)
@@ -687,6 +752,8 @@ static int bq2415x_get_termination_current(struct bq2415x_device *bq)
 			BQ2415X_MASK_VI_TERM, BQ2415X_SHIFT_VI_TERM);
 	if (ret < 0)
 		return ret;
+	if (bq->chip == AW32257)
+		return aw32257_iterm_uv(ret) / bq->init_data.resistor_sense;
 	return (3400 + 3400*ret) / bq->init_data.resistor_sense;
 }
 
@@ -1607,6 +1674,95 @@ static int bq2415x_power_supply_init(struct bq2415x_device *bq)
 	return 0;
 }
 
+/**** charge temperature guard ****/
+
+#define BQ2415X_TEMP_POLL_MS		15000
+#define BQ2415X_TEMP_HYSTERESIS		30	/* deci-celsius */
+
+static void bq2415x_temp_work(struct work_struct *work)
+{
+	struct bq2415x_device *bq =
+		container_of(work, struct bq2415x_device, temp_work.work);
+	union power_supply_propval val;
+	int temp, min, max, ret;
+	bool block;
+
+	if (!bq->fuel_gauge) {
+		bq->fuel_gauge =
+			power_supply_get_by_reference(dev_fwnode(bq->dev),
+						      "fuel-gauge");
+		if (IS_ERR_OR_NULL(bq->fuel_gauge)) {
+			bq->fuel_gauge = NULL;
+			goto reschedule;
+		}
+	}
+
+	ret = power_supply_get_property(bq->fuel_gauge,
+					POWER_SUPPLY_PROP_TEMP, &val);
+	if (ret) {
+		dev_warn_ratelimited(bq->dev,
+				     "battery temperature unreadable (%d), charge guard inactive\n",
+				     ret);
+		goto reschedule;
+	}
+
+	temp = val.intval;
+	min = bq->temp_min;
+	max = bq->temp_max;
+
+	/* Widen the window once blocked, so recovery needs a real margin. */
+	if (bq->temp_blocked) {
+		if (min > INT_MIN)
+			min += BQ2415X_TEMP_HYSTERESIS;
+		if (max < INT_MAX)
+			max -= BQ2415X_TEMP_HYSTERESIS;
+	}
+
+	block = temp < min || temp > max;
+
+	if (block != bq->temp_blocked) {
+		ret = bq2415x_exec_command(bq, block ? BQ2415X_CHARGER_DISABLE :
+						       BQ2415X_CHARGER_ENABLE);
+		if (ret < 0) {
+			dev_err(bq->dev, "failed to %s charging: %d\n",
+				block ? "inhibit" : "resume", ret);
+			goto reschedule;
+		}
+
+		bq->temp_blocked = block;
+		dev_info(bq->dev, "battery %d.%dC: charging %s\n",
+			 temp / 10, abs(temp % 10),
+			 block ? "inhibited" : "resumed");
+	}
+
+reschedule:
+	schedule_delayed_work(&bq->temp_work,
+			      msecs_to_jiffies(BQ2415X_TEMP_POLL_MS));
+}
+
+static bool bq2415x_temp_guard_init(struct bq2415x_device *bq)
+{
+	struct power_supply_battery_info *info;
+	int ret;
+
+	bq->temp_min = INT_MIN;
+	bq->temp_max = INT_MAX;
+
+	ret = power_supply_get_battery_info(bq->charger, &info);
+	if (ret)
+		return false;
+
+	/* operating-range-celsius is whole degrees; we work in deci. */
+	if (info->temp_min > INT_MIN)
+		bq->temp_min = info->temp_min * 10;
+	if (info->temp_max < INT_MAX)
+		bq->temp_max = info->temp_max * 10;
+
+	power_supply_put_battery_info(bq->charger, info);
+
+	return bq->temp_min > INT_MIN || bq->temp_max < INT_MAX;
+}
+
 /* main bq2415x probe function */
 static int bq2415x_probe(struct i2c_client *client)
 {
@@ -1775,6 +1931,17 @@ static int bq2415x_probe(struct i2c_client *client)
 	INIT_DELAYED_WORK(&bq->work, bq2415x_timer_work);
 	bq2415x_set_autotimer(bq, 1);
 
+	if (bq2415x_temp_guard_init(bq)) {
+		INIT_DELAYED_WORK(&bq->temp_work, bq2415x_temp_work);
+		schedule_delayed_work(&bq->temp_work, 0);
+		dev_info(bq->dev, "charge temperature guard: %d.%dC to %d.%dC\n",
+			 bq->temp_min / 10, abs(bq->temp_min % 10),
+			 bq->temp_max / 10, abs(bq->temp_max % 10));
+	} else {
+		dev_warn(bq->dev,
+			 "no operating-range-celsius on the battery, charging is not temperature limited\n");
+	}
+
 	dev_info(bq->dev, "driver registered\n");
 	return 0;
 
@@ -1800,6 +1967,10 @@ static void bq2415x_remove(struct i2c_client *client)
 
 	if (bq->nb.notifier_call)
 		power_supply_unreg_notifier(&bq->nb);
+
+	cancel_delayed_work_sync(&bq->temp_work);
+	if (bq->fuel_gauge)
+		power_supply_put(bq->fuel_gauge);
 
 	of_node_put(bq->notify_node);
 	bq2415x_power_supply_exit(bq);
@@ -1829,6 +2000,7 @@ static const struct i2c_device_id bq2415x_i2c_id_table[] = {
 	{ "bq24156a", BQ24156A },
 	{ "bq24157s", BQ24157S },
 	{ "bq24158", BQ24158 },
+	{ "aw32257", AW32257 },
 	{},
 };
 MODULE_DEVICE_TABLE(i2c, bq2415x_i2c_id_table);
@@ -1867,6 +2039,7 @@ static const struct of_device_id bq2415x_of_match_table[] = {
 	{ .compatible = "ti,bq24156a" },
 	{ .compatible = "ti,bq24157s" },
 	{ .compatible = "ti,bq24158" },
+	{ .compatible = "awinic,aw32257" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, bq2415x_of_match_table);

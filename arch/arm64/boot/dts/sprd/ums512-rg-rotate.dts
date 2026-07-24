@@ -230,6 +230,7 @@
 		constant-charge-voltage-max-microvolt = <4340000>;
 		factory-internal-resistance-micro-ohms = <230000>;
 		voltage-min-design-microvolt = <3410000>;
+		operating-range-celsius = <0 60>;
 		ocv-capacity-celsius = <25>;
 		ocv-capacity-table-0 = <4338000 100>, <4243000 95>,
 			<4189000 90>, <4143000 85>, <4102000 80>,
@@ -239,6 +240,17 @@
 			<3656000 30>, <3622000 25>, <3595000 20>,
 			<3558000 15>, <3523000 10>, <3490000 5>,
 			<3412000 0>;
+
+		resistance-temp-table = <45 98>, <25 97>, <10 97>,
+			<0 97>, <(-10) 98>, <(-20) 98>;
+
+		voltage-temp-table = <1095000 (-200)>, <986000 (-150)>,
+			<878000 (-100)>, <775000 (-50)>, <678000 0>,
+			<590000 50>, <510000 100>, <440000 150>,
+			<378000 200>, <324000 250>, <278000 300>,
+			<238000 350>, <204000 400>, <175000 450>,
+			<150000 500>, <129000 550>, <111000 600>,
+			<96000 650>;
 	};
 
 	dvfs_dcdc_cpu0_supply: dvfs-dcdc-cpu0-supply {
@@ -690,12 +702,19 @@
 	#size-cells = <0>;
 
 	charger: charger@6a {
-		compatible = "ti,bq24158";
+		compatible = "awinic,aw32257";
 		reg = <0x6a>;
+		monitored-battery = <&bat>;
+		fuel-gauge = <&sc2730_fgu>;
 		ti,current-limit = <1800>;
 		ti,weak-battery-voltage = <3400>;
-		ti,battery-regulation-voltage = <4200>;
-		ti,charge-current = <2000>;
+		ti,battery-regulation-voltage = <4340>;
+		/*
+		 * ~0.65C, deliberately below the 1984mA (1.04C) this pack and
+		 * charger are both capable of. Raise this back to 2000 only
+		 * once proper JEITA thermal limiting exists.
+		 */
+		ti,charge-current = <1240>;
 		ti,termination-current = <200>;
 		ti,resistor-sense = <33>;
 

@@ -97,7 +97,8 @@ static int sc27xx_vibra_play(struct input_dev *input, void *data,
 {
 	struct vibra_info *info = input_get_drvdata(input);
 
-	info->strength = effect->u.rumble.weak_magnitude;
+	info->strength = max(effect->u.rumble.strong_magnitude,
+						effect->u.rumble.weak_magnitude);
 	schedule_work(&info->play_work);
 
 	return 0;

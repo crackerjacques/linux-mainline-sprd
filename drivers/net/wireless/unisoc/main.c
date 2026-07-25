@@ -131,6 +131,7 @@ int sc23xx_set_suspend(struct sc23xx_dev *sdev, bool suspend)
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(sc23xx_set_suspend);
 
 static int sc23xx_scan(struct wiphy *wiphy, struct cfg80211_scan_request *request)
 {

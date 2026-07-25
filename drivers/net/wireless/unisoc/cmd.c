@@ -406,9 +406,15 @@ int sc23xx_cmd_connect(struct sc23xx_vif *vif, struct cfg80211_connect_params *s
 			return ret;
 	}
 
-	ret = sc23xx_cmd_set_ie(vif, SC23XX_IE_ASSOC_REQ, sme->ie, sme->ie_len);
-	if (ret)
-		return ret;
+	/* The firmware rejects a zero-length IE blob with ARG_ERROR, failing
+	 * the whole connect. No extra assoc IEs is valid (e.g. iw's plain
+	 * open-system connect), so only send the command when there are any. */
+	if (sme->ie_len) {
+		ret = sc23xx_cmd_set_ie(vif, SC23XX_IE_ASSOC_REQ, sme->ie,
+					sme->ie_len);
+		if (ret)
+			return ret;
+	}
 
 	skb = sc23xx_cmd_alloc_skb(CMD_CONNECT, sizeof(*req), vif->idx);
 	if (!skb)

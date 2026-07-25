@@ -139,6 +139,7 @@ static const struct of_device_id wcn_global_match_table[] = {
 #endif
 	{ },
 };
+MODULE_DEVICE_TABLE(of, wcn_global_match_table);
 
 static struct wcn_match_data *g_match_data;
 struct wcn_match_data *get_wcn_match_config(void)

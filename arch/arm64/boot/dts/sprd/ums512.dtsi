@@ -42,7 +42,6 @@
 				#address-cells = <1>;
 				#size-cells = <1>;
 
-				/* Per-die 64-bit chip UID (from the stock DTB). */
 				uid_start: uid-start@5c {
 					reg = <0x5c 0x4>;
 				};
@@ -143,7 +142,6 @@
 			};
 		};
 
-		/* Stock audio carveouts (see device/stock/dtb_stock.dts) */
 		audio_reserved: audio-mem@87400000 {
 			reg = <0x0 0x87400000 0x0 0x400000>;
 			no-map;

@@ -271,6 +271,7 @@ err_free_netdev:
 int sc23xx_vif_reopen(struct sc23xx_vif *vif, enum nl80211_iftype iftype)
 {
 	enum sc23xx_vif_mode mode;
+	struct sc23xx_vif *other;
 	int ret;
 	u8 idx;
 
@@ -279,12 +280,18 @@ int sc23xx_vif_reopen(struct sc23xx_vif *vif, enum nl80211_iftype iftype)
 		return ret;
 
 	mutex_lock(&vif->sdev->vif_lock);
-	/* AP interface may also act as second STA interface */
-	if (rcu_access_pointer(vif->sdev->vif[idx]) && idx == SC23XX_VIF_STA) {
+	/* AP interface may also act as second STA interface. Only fall back to
+	 * the second-STA context when a *different* vif holds the STA slot: on
+	 * a reopen this vif is already installed there itself, and demoting it
+	 * to STATION_SECOND lands it in a context the firmware cannot
+	 * authenticate in (connect times out with status 16). */
+	other = rcu_access_pointer(vif->sdev->vif[idx]);
+	if (other && other != vif && idx == SC23XX_VIF_STA) {
 		idx = SC23XX_VIF_AP;
 		mode = SC23XX_MODE_STATION_SECOND;
 	}
-	if (rcu_access_pointer(vif->sdev->vif[idx])) {
+	other = rcu_access_pointer(vif->sdev->vif[idx]);
+	if (other && other != vif) {
 		wiphy_err(vif->sdev->wiphy, "%s interface already exists\n",
 			  sc23xx_vif_idx_to_string(idx));
 		mutex_unlock(&vif->sdev->vif_lock);
@@ -293,13 +300,15 @@ int sc23xx_vif_reopen(struct sc23xx_vif *vif, enum nl80211_iftype iftype)
 
 	if (!test_bit(SC23XX_FLAG_OPENED, &vif->flags)) {
 		ret = sc23xx_cmd_close(vif);
-		if (ret)
+		if (ret) {
+			mutex_unlock(&vif->sdev->vif_lock);
 			return ret;
+		}
 	}
 
-	vif->idx = idx;
 	rcu_assign_pointer(vif->sdev->vif[vif->idx], NULL);
 	rcu_assign_pointer(vif->sdev->vif[idx], vif);
+	vif->idx = idx;
 	mutex_unlock(&vif->sdev->vif_lock);
 
 	vif->wdev.iftype = iftype;

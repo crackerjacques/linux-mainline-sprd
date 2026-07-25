@@ -517,7 +517,6 @@ void *sc23xx_alloc_device(struct device *dev, size_t size,
 				  sc23xx_cmd_tx_addba_req);
 	}
 
-	wiphy->features |= NL80211_FEATURE_SAE;
 	wiphy->flags |= WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL;
 	wiphy->max_remain_on_channel_duration = 5000;
 	wiphy->max_num_pmkids = SC23XX_MAX_NUM_PMKIDS;

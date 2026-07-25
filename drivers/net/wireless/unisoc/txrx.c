@@ -64,6 +64,10 @@ void sc23xx_rx_now(struct sc23xx_dev *sdev, struct sk_buff *skb)
 	if (!vif)
 		goto out_unlock;
 	ndev = vif->wdev.netdev;
+	if (!ndev) {
+		dev_kfree_skb_any(skb);
+		goto out_unlock;
+	}
 
 	len = le16_to_cpu(hdr->pkt_len);
 	if (hdr->offset < sizeof(*hdr) || skb->len < (hdr->offset + len)) {

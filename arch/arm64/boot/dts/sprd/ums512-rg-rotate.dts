@@ -670,6 +670,15 @@
 	dcdc-supply-mode-cfg = <&dvfs_dcdc_cpu1_supply>;
 };
 
+/*
+ * Stock enables the hw-i2c master at 1MHz (overlay fragment@7 on aon_i2c0).
+ * The big cluster's DVFS voltage path runs through it.
+ */
+&aon_i2c0 {
+	status = "okay";
+	clock-frequency = <1000000>;
+};
+
 &cpudvfs_dev {
 	status = "okay";
 };

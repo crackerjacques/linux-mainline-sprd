@@ -280,5 +280,6 @@ struct cpudvfs_archdata {
 extern int cpudvfs_sysfs_create(struct cpudvfs_archdata *pdev);
 
 extern const struct dvfs_private_data ums312_dvfs_private_data;
+extern const struct dvfs_private_data ums512_dvfs_private_data;
 
 #endif /* DVFS_CTRL_H */

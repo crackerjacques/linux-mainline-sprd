@@ -50,6 +50,7 @@ static const struct of_device_id sprd_cpudvfs_of_match[] = {
 	},
 	{
 		.compatible = "sprd,sharkl5pro-cpudvfs",
+		.data = &ums512_dvfs_private_data,
 	},
 	{
 		.compatible = "sprd,orca-cpudvfs",
@@ -355,16 +356,25 @@ int host_cluster_auto_tuning_enable(void *clu, bool enable)
 	addr1 = pdev->pwr[cluster->id].subsys_tune_ctl_reg;
 	bit1 =  1 << pdev->pwr[cluster->id].subsys_tune_ctl_bit;
 
-	/* Enable TOP DVFS to change voltage dynamically */
+	/*
+	 * Enable TOP DVFS to change voltage dynamically.
+	 *
+	 * These must SET the bit: passing ~bit as the value leaves
+	 * (val & mask) == 0, which clears it and leaves hw dvfs disabled.
+	 * cf. slave_cluster_auto_tuning_enable() below, which has it right.
+	 * The dts third cell (dvfs_eb / subsys_tune_eb) only gates whether we
+	 * touch the bit at all - see cpufreq-hwdvfs-sprd.txt, where value 0
+	 * means "the hw dvfs function should be disabled".
+	 */
 	if (enable && pdev->pwr[cluster->id].dvfs_eb) {
-		ret = regmap_update_bits(pdev->topdvfs_map, addr0, bit0, ~bit0);
+		ret = regmap_update_bits(pdev->topdvfs_map, addr0, bit0, bit0);
 		if (ret)
 			return ret;
 	}
 
 	/* Enable Subsys DVFS to change frequency dynamically */
 	if (enable && pdev->pwr[cluster->id].subsys_tune_eb) {
-		ret = regmap_update_bits(pdev->topdvfs_map, addr1, bit1, ~bit1);
+		ret = regmap_update_bits(pdev->topdvfs_map, addr1, bit1, bit1);
 		if (ret)
 			return ret;
 	}
@@ -1366,8 +1376,12 @@ static int voltage_grade_value_update(struct dvfs_cluster *clu,
 
 	pm = &pdev->priv->pmic[pmic_num];
 
-	if (!regdata || !pm) {
-		pr_err("Empty private data\n");
+	/*
+	 * pm always points into the pmic array, so a pmic-type-num naming an
+	 * unpopulated slot yields a zeroed entry, not NULL. Check the contents.
+	 */
+	if (!regdata || !pm->update || !pm->per_step) {
+		pr_err("No pmic data for pmic-type-num %d\n", pmic_num);
 		return -EINVAL;
 	}
 
@@ -1497,8 +1511,8 @@ static int sprd_cpudvfs_udelay_update(void *data, int cluster)
 	}
 
 	pm = &pdev->priv->pmic[pmic_num];
-	if (!pm) {
-		pr_err("Empty private data\n");
+	if (!pm->up_cycle_calculate || !pm->down_cycle_calculate) {
+		pr_err("No pmic data for pmic-type-num %d\n", pmic_num);
 		return -EINVAL;
 	}
 

@@ -567,6 +567,7 @@ static int __maybe_unused sprd_i2c_hw_runtime_resume(struct device *pdev)
 
 static const struct of_device_id sprd_i2c_hw_of_match[] = {
 	{ .compatible = "sprd,ums9230-hw-i2c", },
+	{ .compatible = "sprd,sharkl5pro-hw-i2c", },
 	{},
 };
 

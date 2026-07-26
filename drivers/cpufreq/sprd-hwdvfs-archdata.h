@@ -30,6 +30,11 @@
 enum sprd_cpudvfs_pmic {
 	PMIC_SC2730,
 	PMIC_SC2703,
+	/*
+	 * The I2C-attached "third" pmic supplying the big cluster on ums512
+	 * boards; selected by "pmic-type-num = <2>" in the dcdc supply node.
+	 */
+	PMIC_I2C_THIRD,
 	MAX_PMIC_TYPE_NUM = 8,
 };
 

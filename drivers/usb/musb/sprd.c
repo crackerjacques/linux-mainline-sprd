@@ -53,8 +53,8 @@ static int sprd_otg_switch_set(struct sprd_glue *glue, enum usb_role role)
 	switch (role) {
 	case USB_ROLE_HOST:
 		/*
-		 * No TCPM on this board, so the role switch is what turns on
-		 * VBUS: enable the charger's OTG boost regulator to source 5V.
+		 * The TCPM only resolves the data/power role; sourcing VBUS is
+		 * ours to do, via the charger's OTG boost regulator.
 		 */
 		if (glue->vbus) {
 			ret = regulator_enable(glue->vbus);
@@ -62,13 +62,24 @@ static int sprd_otg_switch_set(struct sprd_glue *glue, enum usb_role role)
 				dev_err(glue->dev,
 					"failed to enable vbus: %d\n", ret);
 		}
-		musb->is_active = 1;
 		musb_set_state(musb, OTG_STATE_A_IDLE);
 		MUSB_HST_MODE(musb);
-		devctl |= MUSB_DEVCTL_SESSION;
-		musb_writeb(musb->mregs, MUSB_DEVCTL, devctl);
 		phy_power_on(glue->phy);
 		phy_set_mode(glue->phy, PHY_MODE_USB_HOST);
+		/*
+		 * Nothing else starts the controller in host role: port_mode is
+		 * MUSB_OTG, so musb_has_gadget() is false and the root hub's
+		 * SetPortFeature(POWER) path skips musb_start(). Without it the
+		 * USB interrupts are never enabled and no attach is ever seen,
+		 * even though VBUS is live. Start it here, as the peripheral
+		 * branch below does, then assert the session: musb_start() reads
+		 * DEVCTL itself and would drop a session bit set beforehand.
+		 */
+		musb_start(musb);
+		musb->is_active = 1;
+		musb_writeb(musb->mregs, MUSB_DEVCTL,
+			    musb_readb(musb->mregs, MUSB_DEVCTL) |
+			    MUSB_DEVCTL_SESSION);
 		break;
 	case USB_ROLE_DEVICE:
 		MUSB_DEV_MODE(musb);

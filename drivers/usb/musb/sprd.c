@@ -29,6 +29,7 @@ struct sprd_glue {
 static int sprd_otg_switch_set(struct sprd_glue *glue, enum usb_role role)
 {
 	struct musb *musb = glue->musb;
+	unsigned long flags;
 	u8 devctl;
 	int ret;
 
@@ -38,6 +39,20 @@ static int sprd_otg_switch_set(struct sprd_glue *glue, enum usb_role role)
 	devctl = musb_readb(musb->mregs, MUSB_DEVCTL);
 
 	if (glue->role != USB_ROLE_NONE) {
+		/*
+		 * Leaving host role: tell the root hub the port lost its
+		 * connection. Detach is signalled out of band by the TCPM (no ID
+		 * pin on this board), so the controller never raises a disconnect
+		 * interrupt of its own and usbcore would otherwise keep the
+		 * enumerated device around forever.
+		 */
+		if (glue->role == USB_ROLE_HOST) {
+			spin_lock_irqsave(&musb->lock, flags);
+			if (musb->port1_status & USB_PORT_STAT_ENABLE)
+				musb_root_disconnect(musb);
+			spin_unlock_irqrestore(&musb->lock, flags);
+		}
+
 		/* force disconnect */
 		musb->is_active = 0;
 		devctl &= ~MUSB_DEVCTL_SESSION;

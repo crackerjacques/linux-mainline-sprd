@@ -1297,7 +1297,21 @@ static int __maybe_unused sprd_dma_runtime_resume(struct device *dev)
 	return ret;
 }
 
+/*
+ * The AGCP controller lives in the audcp power domain, which is dropped
+ * over a system suspend, so its clock gates come back cleared. Without
+ * system sleep ops the device stays runtime-active across the suspend, the
+ * clock framework still believes the gates are enabled, and clk_enable() on
+ * the next transfer is a no-op refcount bump that never rewrites the
+ * register - the controller then sits there with no clock, moving no data
+ * and raising no interrupts, for the rest of the boot.
+ *
+ * Forcing a runtime PM cycle around the suspend takes the enable counts
+ * down to zero and back up, so resume really does reprogram the gates.
+ */
 static const struct dev_pm_ops sprd_dma_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
+				pm_runtime_force_resume)
 	SET_RUNTIME_PM_OPS(sprd_dma_runtime_suspend,
 			   sprd_dma_runtime_resume,
 			   NULL)

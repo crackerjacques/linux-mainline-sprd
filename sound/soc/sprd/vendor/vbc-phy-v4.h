@@ -1415,6 +1415,15 @@ struct aud_pm_vbc {
 	/* prot scene_case_flag */
 	struct mutex lock_scene_flag;
 	int scene_flag[VBC_DAI_ID_MAX][STREAM_CNT];
+	/*
+	 * Last hw_params of the normal playback scene. Suspend sends a
+	 * shutdown to the dsp, so resume has to replay the startup and these
+	 * params instead of waiting for userspace to re-open the pcm.
+	 */
+	bool normal_p_params_valid;
+	int normal_p_vbc_chan;
+	int normal_p_data_fmt;
+	u32 normal_p_rate;
 };
 
 /* FIRMWARE */

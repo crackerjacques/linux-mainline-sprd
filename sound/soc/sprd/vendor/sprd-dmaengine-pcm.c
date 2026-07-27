@@ -138,11 +138,20 @@ struct dma_chan_index_name {
 	const char *name;
 };
 
+/*
+ * No SNDRV_PCM_INFO_RESUME: the dma channels are released over a system
+ * suspend and can only be re-acquired from a sleeping context, so a
+ * TRIGGER_RESUME (which runs atomically) cannot put the stream back and
+ * just fails with -ENODATA. Advertising resume made alsa-lib take the
+ * snd_pcm_resume() recovery path, get a hard error and give up; without it
+ * ESTRPIPE recovery falls through to snd_pcm_prepare(), where
+ * sprd_pcm_rearm_dma() can do the work properly.
+ */
 #define SPRD_SNDRV_PCM_INFO_COMMON ( \
 	SNDRV_PCM_INFO_MMAP | \
 	SNDRV_PCM_INFO_MMAP_VALID | \
 	SNDRV_PCM_INFO_INTERLEAVED | \
-	SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_RESUME)
+	SNDRV_PCM_INFO_PAUSE)
 #define SPRD_SNDRV_PCM_FMTBIT (SNDRV_PCM_FMTBIT_S16_LE | \
 			       SNDRV_PCM_FMTBIT_S24_LE | \
 			       SNDRV_PCM_FMTBIT_S32_LE)

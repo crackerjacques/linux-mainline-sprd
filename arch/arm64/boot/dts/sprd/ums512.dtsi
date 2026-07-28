@@ -33,9 +33,17 @@
 		#size-cells = <2>;
 		ranges;
 
-		nvmem@800 {
+		/*
+		 * The vendor sprd_cache_efuse driver reads block n from
+		 * base + 0x4 + n * 4, and its cell offsets are relative to
+		 * that skipped first word. Generic nvmem-rmem has no such
+		 * quirk, so fold the +0x4 into the base and keep the vendor
+		 * cell offsets verbatim - the same thing ums9230.dtsi does.
+		 * Size is the real cache extent: 24 blocks * 4 bytes.
+		 */
+		nvmem@804 {
 			compatible = "sprd,ums512-cache-efuse", "nvmem-rmem";
-			reg = <0 0x800 0 0x3ff>;
+			reg = <0 0x804 0 0x60>;
 			no-map;
 
 			nvmem-layout {

@@ -228,7 +228,16 @@ void sdiohal_tx_down(void)
 {
 	struct sdiohal_data_t *p_data = sdiohal_get_data();
 
-	wait_for_completion(&p_data->tx_completed);
+	/*
+	 * TASK_FREEZABLE lets the freezer park the TX thread here, inside the
+	 * wait, and resume the wait on thaw -- so there is no early return to
+	 * handle and no completion is consumed. The caller must hold no locks
+	 * and no wake source across this, which is true at the top of
+	 * sdiohal_tx_thread()'s loop. Staying UNINTERRUPTIBLE means a signal
+	 * cannot make this return either, so the result is always 0.
+	 */
+	wait_for_completion_state(&p_data->tx_completed,
+				  TASK_UNINTERRUPTIBLE | TASK_FREEZABLE);
 }
 
 void sdiohal_tx_up(void)

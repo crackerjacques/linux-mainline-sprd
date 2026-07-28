@@ -5,6 +5,7 @@
  * Filename : sdiohal_tx.c
  * Abstract : This file is a implementation for wcn sdio hal function
  */
+#include <linux/freezer.h>
 #include <linux/sched/clock.h>
 #include "sdiohal.h"
 
@@ -64,6 +65,16 @@ int sdiohal_tx_thread(void *data)
 	set_user_nice(current, -20);
 	/* sched_setscheduler() is not exported to modules; use sched_set_fifo(). */
 	sched_set_fifo(current);
+
+	/*
+	 * kthreads are PF_NOFREEZE by default, so without this the freezer skips
+	 * this thread entirely and it keeps driving the SDIO bus after "Freezing
+	 * remaining freezable tasks" -- which trips sdiohal_resume_check() and
+	 * then makes sdiohal_suspend() fail with -EBUSY. The matching freezable
+	 * wait is in sdiohal_tx_down(); the freeze lands at the top of the loop
+	 * below, before any lock or wake source is taken.
+	 */
+	set_freezable();
 
 	while (1) {
 		/* Wait the semaphore */

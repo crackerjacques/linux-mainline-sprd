@@ -112,8 +112,9 @@ static int loopcheck_send(char *buf, unsigned int len)
 	else
 		pub_head_rsv = PUB_HEAD_RSV;
 
-	WCN_INFO("%s", __wcn_get_sw_ver());
-	WCN_INFO("tx:%s\n", buf);
+	/* Both fire every LOOPCHECK_TIMER_INTERVAL seconds -- pr_debug, not pr_info. */
+	WCN_DBG("%s", __wcn_get_sw_ver());
+	WCN_DBG("tx:%s\n", buf);
 	if (unlikely(!marlin_get_module_status())) {
 		WCN_ERR("WCN module have not open\n");
 		return -EIO;
@@ -256,8 +257,18 @@ int loopcheck_init(void)
 {
 	loopcheck.status = 0;
 	init_completion(&loopcheck.completion);
+	/*
+	 * WQ_FREEZABLE, and not create_singlethread_workqueue(): on SDIO the
+	 * loopcheck sends via sprdwcn_bus_push_list_direct(), i.e. it drives the
+	 * bus from this worker's own context rather than through the TX thread.
+	 * On an unfreezable queue that keeps happening after the freeze, which
+	 * is what makes sdiohal_suspend() fail with -EBUSY and burn ~6 s in the
+	 * power_notify() unwind. Freezing the queue also drains any in-flight
+	 * loopcheck before suspend proceeds. Still ordered, as before.
+	 * WQ_MEM_RECLAIM is dropped deliberately -- this is not a reclaim path.
+	 */
 	loopcheck.workqueue =
-		create_singlethread_workqueue("WCN_LOOPCHECK_QUEUE");
+		alloc_ordered_workqueue("WCN_LOOPCHECK_QUEUE", WQ_FREEZABLE);
 	if (!loopcheck.workqueue) {
 		WCN_ERR("WCN_LOOPCHECK_QUEUE create failed");
 		return -ENOMEM;

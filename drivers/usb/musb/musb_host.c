@@ -2750,7 +2750,17 @@ int musb_host_setup(struct musb *musb, int power_budget)
 	if (ret < 0)
 		return ret;
 
-	device_wakeup_enable(hcd->self.controller);
+	/*
+	 * Advertise wakeup capability but leave it switched off. Enabling it
+	 * here made device_may_wakeup() true at probe on every port_mode that
+	 * runs host setup -- including MUSB_OTG -- so musb_suspend() armed
+	 * enable_irq_wake() unconditionally, contradicting its own comment that
+	 * wakeup should only be armed if userspace opted in. Nothing ever undid
+	 * it: the only device_init_wakeup(dev, 0) calls are on the probe-failure
+	 * and remove paths. The device stays wakeup-capable, so power/wakeup is
+	 * still present and userspace can turn it on.
+	 */
+	device_set_wakeup_capable(hcd->self.controller, true);
 	return 0;
 }
 

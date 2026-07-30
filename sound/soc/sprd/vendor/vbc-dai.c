@@ -5345,6 +5345,7 @@ static inline void vbc_proc_init(struct snd_soc_component *codec)
 static void vbc_ag_iis0_restore_route(struct vbc_codec_priv *vbc_codec)
 {
 	bool wrote = false;
+	u32 before = ~0u;
 
 	if (agdsp_access_enable() != 0) {
 		pr_err("%s: agdsp_access_enable failed, AG IIS0 route not restored\n",
@@ -5352,8 +5353,17 @@ static void vbc_ag_iis0_restore_route(struct vbc_codec_priv *vbc_codec)
 		return;
 	}
 	if (agdsp_can_access()) {
+		/*
+		 * Log the pre-write value so it is possible to tell "we restored
+		 * a bit that had been lost" from "it was never cleared this
+		 * time" -- the two are indistinguishable from a post-hoc devmem
+		 * read, which cost us a misattribution once already.
+		 */
+		agcp_ahb_reg_read(REG_AGCP_AHB_EXT_ACC_AG_SEL, &before);
 		arch_audio_iis_to_audio_top_enable(AG_IIS0, 1);
 		wrote = true;
+		pr_info("%s: AG IIS0 route asserted (EXT_ACC_AG_SEL was %#x)\n",
+			__func__, before);
 	} else {
 		/*
 		 * Legitimately transient: AGCP can still be asleep at probe, and
@@ -6411,6 +6421,22 @@ static int dsp_startup(struct vbc_codec_priv *vbc_codec,
 	 * needs its clock once data flows at trigger, not at startup.
 	 */
 	vbc_ag_iis0_restore_route(vbc_codec);
+	/*
+	 * Same story, bigger blast radius: the digital codec at
+	 * audio-codec@33750000 is in the same audcp domain and loses its whole
+	 * register window across a suspend that had a PCM open. AUD_TOP_CTL comes
+	 * back as 0 -- DAC/ADC enables gone -- so there is no DAC and no I2S
+	 * clock, the DSP's IIS output afifo backs up, and the DSP stops draining
+	 * the vbc play fifo. DAPM cannot notice (its widget state still says the
+	 * DACs are on) and the codec component has no .suspend/.resume, so
+	 * without this nothing reprograms it and audio stays wedged until a full
+	 * close/re-open. See OPEN-ITEMS.md section 5.
+	 *
+	 * Must be here rather than in a component .resume for the same reason as
+	 * the mux above: AGCP is still asleep right after restore_access(), and
+	 * DP register writes are silently dropped then.
+	 */
+	sprd_codec_restore_digital_regs();
 	agdsp_access_disable();
 
 	return 0;

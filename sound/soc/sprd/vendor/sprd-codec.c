@@ -199,6 +199,59 @@ static void sprd_codec_psg_state_exit(struct snd_soc_component *codec);
 
 static unsigned long sprd_codec_dp_base;
 
+/*
+ * Write-through shadow of the digital (DP) register window.
+ *
+ * The digital codec is audio-codec@33750000, which sits in the audcp power
+ * domain (power-domains = <&audcp_boot>). Those registers are silently lost
+ * across a suspend that had a PCM open -- AUD_TOP_CTL reads back 0, i.e. the
+ * DAC/ADC enables are gone -- and nothing reprograms them:
+ *
+ *  - the DAC/ADC enable bits in AUD_TOP_CTL are owned by DAPM widgets
+ *    (SND_SOC_DAPM_PGA_S("Digital DACL Switch", ..., SOC_REG(AUD_TOP_CTL), ...)),
+ *    and DAPM's software state still says they are on, so it never rewrites them;
+ *  - this component has no .suspend/.resume and no regmap cache, so nothing
+ *    replays them either.
+ *
+ * With no DAC and no I2S clock the DSP's IIS output afifo backs up, the DSP
+ * stops draining the vbc play fifo, and audio wedges until a full close/re-open
+ * forces DAPM to reprogram it. See OPEN-ITEMS.md section 5.
+ *
+ * Shadowing every successful DP write lets sprd_codec_restore_digital_regs()
+ * replay the real intended values on resume, and lets sprd_codec_read() return
+ * something truthful instead of 0 when audcp happens to be asleep (a false zero
+ * there would make the next snd_soc_component_update_bits() write a corrupted
+ * value).
+ */
+#define SPRD_CODEC_DP_SHADOW_NR \
+	((SPRD_CODEC_DP_END - SPRD_CODEC_DP_BASE) / 4)
+
+static u32 sprd_codec_dp_shadow[SPRD_CODEC_DP_SHADOW_NR];
+static bool sprd_codec_dp_shadow_valid[SPRD_CODEC_DP_SHADOW_NR];
+static struct snd_soc_component *sprd_codec_dp_component;
+
+/* index into the shadow for a DP register, or -1 if out of window */
+static int sprd_codec_dp_shadow_idx(unsigned int reg)
+{
+	unsigned int off;
+
+	if (reg < SPRD_CODEC_DP_BASE || reg >= SPRD_CODEC_DP_END)
+		return -1;
+	off = reg - SPRD_CODEC_DP_BASE;
+	if (off & 0x3)
+		return -1;
+	return off / 4;
+}
+
+/*
+ * Registers that must never be replayed: status, and write-to-clear. Restoring
+ * these would either be meaningless or would ack interrupts that never happened.
+ */
+static bool sprd_codec_dp_reg_volatile(unsigned int reg)
+{
+	return reg == AUD_AUD_STS0 || reg == AUD_INT_CLR;
+}
+
 enum {
 	CODEC_PATH_DA = 0,
 	CODEC_PATH_AD,
@@ -3302,9 +3355,24 @@ static unsigned int sprd_codec_read(struct snd_soc_component *codec,
 		 * is genuinely powered before touching the digital reg window.
 		 */
 		if (!agdsp_can_access()) {
+			/*
+			 * Return the shadowed intended value rather than 0.
+			 * A false zero here is not harmless: the caller is
+			 * often snd_soc_component_update_bits(), which would
+			 * then compute its new value from 0 and write back a
+			 * corrupted register.
+			 */
+			int idx = sprd_codec_dp_shadow_idx(reg &
+							   ~SPRD_CODEC_DP_BASE_HI);
+
+			agdsp_access_disable();
+			if (idx >= 0 && sprd_codec_dp_shadow_valid[idx]) {
+				pr_warn_ratelimited("%s: audcp asleep, DP reg 0x%x from shadow\n",
+						    __func__, reg);
+				return sprd_codec_dp_shadow[idx];
+			}
 			pr_warn_ratelimited("%s: audcp not accessible, DP reg 0x%x read as 0\n",
 					    __func__, reg);
-			agdsp_access_disable();
 			return 0;
 		}
 		codec_digital_reg_enable(codec);
@@ -3326,6 +3394,7 @@ static int sprd_codec_write(struct snd_soc_component *codec, unsigned int reg,
 			    unsigned int val)
 {
 	int ret = 0;
+	int idx;
 
 	if (IS_SPRD_CODEC_AP_RANG(reg | SPRD_CODEC_AP_BASE_HI)) {
 		reg |= SPRD_CODEC_AP_BASE_HI;
@@ -3367,6 +3436,13 @@ static int sprd_codec_write(struct snd_soc_component *codec, unsigned int reg,
 		codec_digital_reg_disable(codec);
 		agdsp_access_disable();
 
+		/* record the intended value so resume can replay it */
+		idx = sprd_codec_dp_shadow_idx(reg & ~SPRD_CODEC_DP_BASE_HI);
+		if (idx >= 0) {
+			sprd_codec_dp_shadow[idx] = val;
+			sprd_codec_dp_shadow_valid[idx] = true;
+		}
+
 		return ret;
 	}
 
@@ -3375,6 +3451,61 @@ static int sprd_codec_write(struct snd_soc_component *codec, unsigned int reg,
 
 	return ret;
 }
+
+/*
+ * Replay the shadowed digital register window onto the hardware.
+ *
+ * Called after a suspend has silently emptied the audcp-domain digital codec
+ * registers. See the shadow declaration above for why nothing else does this.
+ *
+ * MUST be called from a point where AGCP is provably awake. Immediately after
+ * restore_access() the access bridge is open but AGCP is still in deep-sleep, so
+ * agdsp_can_access() is false and every write is dropped on the floor (measured:
+ * "BIT_PMU_APB_AGCP_SYS_SLP_STATUS not enable"). The end of dsp_startup(), after
+ * the startup ipc has woken the DSP, is the known-good spot -- which is why the
+ * caller lives there rather than in a component .resume.
+ *
+ * Returns the number of registers written, or -EAGAIN if the codec is not yet
+ * usable so the caller can tell "nothing to do" from "too early".
+ */
+int sprd_codec_restore_digital_regs(void)
+{
+	struct snd_soc_component *codec = sprd_codec_dp_component;
+	unsigned int reg;
+	int idx, n = 0;
+
+	if (!codec || !sprd_codec_dp_base)
+		return -EAGAIN;
+
+	if (agdsp_access_enable() != 0)
+		return -EAGAIN;
+	if (!agdsp_can_access()) {
+		agdsp_access_disable();
+		return -EAGAIN;
+	}
+	agdsp_access_disable();
+
+	for (reg = SPRD_CODEC_DP_BASE; reg < SPRD_CODEC_DP_END; reg += 4) {
+		idx = sprd_codec_dp_shadow_idx(reg);
+		if (idx < 0 || !sprd_codec_dp_shadow_valid[idx])
+			continue;
+		if (sprd_codec_dp_reg_volatile(reg))
+			continue;
+		/*
+		 * Go through the component write so the agdsp access hold, the
+		 * digital-reg clock enable and the reg tracing all behave exactly
+		 * as on the normal path. It re-shadows the same value harmlessly.
+		 */
+		snd_soc_component_write(codec, reg, sprd_codec_dp_shadow[idx]);
+		n++;
+	}
+
+	sp_asoc_pr_info("%s: replayed %d digital regs, AUD_TOP_CTL now 0x%04x\n",
+			__func__, n, snd_soc_component_read(codec, AUD_TOP_CTL));
+
+	return n;
+}
+EXPORT_SYMBOL_GPL(sprd_codec_restore_digital_regs);
 
 static int sprd_codec_pcm_hw_params(struct snd_pcm_substream *substream,
 				    struct snd_pcm_hw_params *params,
@@ -3758,6 +3889,8 @@ static int sprd_codec_soc_probe(struct snd_soc_component *codec)
 	/* idle_bias_off is the default now (driver->idle_bias_on = 0) */
 
 	sprd_codec->codec = codec;
+	/* used by sprd_codec_restore_digital_regs(), called from the vbc side */
+	sprd_codec_dp_component = codec;
 
 	sprd_codec_proc_init(sprd_codec);
 
@@ -3780,6 +3913,7 @@ static int sprd_codec_soc_probe(struct snd_soc_component *codec)
 /* power down chip */
 static void sprd_codec_soc_remove(struct snd_soc_component *codec)
 {
+	sprd_codec_dp_component = NULL;
 	sprd_headset_remove();
 }
 

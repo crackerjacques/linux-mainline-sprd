@@ -10,6 +10,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/pm.h>
 #include <linux/regmap.h>
 
 /* EIC registers definition */
@@ -52,6 +53,8 @@ enum {
  * @reg: the array to cache the EIC registers.
  * @buslock: for bus lock/sync and unlock.
  * @irq: the interrupt number of the PMIC EIC conteroller.
+ * @wake_mask: the EICs that are allowed to wake the system from suspend.
+ * @saved_ie: the IE register contents saved across suspend.
  */
 struct sprd_pmic_eic {
 	struct gpio_chip chip;
@@ -60,6 +63,8 @@ struct sprd_pmic_eic {
 	u8 reg[CACHE_NR_REGS];
 	struct mutex buslock;
 	int irq;
+	u32 wake_mask;
+	u32 saved_ie;
 };
 
 static void sprd_pmic_eic_update(struct gpio_chip *chip, unsigned int offset,
@@ -192,6 +197,26 @@ static int sprd_pmic_eic_irq_set_type(struct irq_data *data,
 	return 0;
 }
 
+static int sprd_pmic_eic_irq_set_wake(struct irq_data *data, unsigned int on)
+{
+	struct gpio_chip *chip = irq_data_get_irq_chip_data(data);
+	struct sprd_pmic_eic *pmic_eic = gpiochip_get_data(chip);
+	u32 offset = irqd_to_hwirq(data);
+
+	/*
+	 * The EIC block itself has no per-EIC wake enable: every unmasked EIC
+	 * pulls the shared PMIC interrupt, which the PMIC MFD arms as a system
+	 * wake source unconditionally. So just remember who asked to be a wake
+	 * source and mask everybody else in the suspend callback below.
+	 */
+	if (on)
+		pmic_eic->wake_mask |= BIT(offset);
+	else
+		pmic_eic->wake_mask &= ~BIT(offset);
+
+	return 0;
+}
+
 static void sprd_pmic_eic_bus_lock(struct irq_data *data)
 {
 	struct gpio_chip *chip = irq_data_get_irq_chip_data(data);
@@ -296,9 +321,10 @@ static const struct irq_chip pmic_eic_irq_chip = {
 	.irq_mask		= sprd_pmic_eic_irq_mask,
 	.irq_unmask		= sprd_pmic_eic_irq_unmask,
 	.irq_set_type		= sprd_pmic_eic_irq_set_type,
+	.irq_set_wake		= sprd_pmic_eic_irq_set_wake,
 	.irq_bus_lock		= sprd_pmic_eic_bus_lock,
 	.irq_bus_sync_unlock	= sprd_pmic_eic_bus_sync_unlock,
-	.flags			= IRQCHIP_SKIP_SET_WAKE | IRQCHIP_IMMUTABLE,
+	.flags			= IRQCHIP_IMMUTABLE,
 	GPIOCHIP_IRQ_RESOURCE_HELPERS,
 };
 
@@ -358,8 +384,53 @@ static int sprd_pmic_eic_probe(struct platform_device *pdev)
 		return ret;
 	}
 
+	platform_set_drvdata(pdev, pmic_eic);
+
 	return 0;
 }
+
+static int sprd_pmic_eic_suspend(struct device *dev)
+{
+	struct sprd_pmic_eic *pmic_eic = dev_get_drvdata(dev);
+	u32 ie;
+	int ret;
+
+	/*
+	 * Read the live IE register rather than the reg[] cache: the cache is
+	 * only kept for the EICs that have been through the irq bus lock, and
+	 * the hardware is the authority on what is currently armed.
+	 */
+	mutex_lock(&pmic_eic->buslock);
+
+	ret = regmap_read(pmic_eic->map, pmic_eic->offset + SPRD_PMIC_EIC_IE,
+			  &ie);
+	if (ret)
+		goto out;
+
+	pmic_eic->saved_ie = ie;
+	ret = regmap_write(pmic_eic->map, pmic_eic->offset + SPRD_PMIC_EIC_IE,
+			   ie & pmic_eic->wake_mask);
+
+out:
+	mutex_unlock(&pmic_eic->buslock);
+	return ret;
+}
+
+static int sprd_pmic_eic_resume(struct device *dev)
+{
+	struct sprd_pmic_eic *pmic_eic = dev_get_drvdata(dev);
+	int ret;
+
+	mutex_lock(&pmic_eic->buslock);
+	ret = regmap_write(pmic_eic->map, pmic_eic->offset + SPRD_PMIC_EIC_IE,
+			   pmic_eic->saved_ie);
+	mutex_unlock(&pmic_eic->buslock);
+
+	return ret;
+}
+
+static DEFINE_SIMPLE_DEV_PM_OPS(sprd_pmic_eic_pm_ops, sprd_pmic_eic_suspend,
+				sprd_pmic_eic_resume);
 
 static const struct of_device_id sprd_pmic_eic_of_match[] = {
 	{ .compatible = "sprd,sc2731-eic", },
@@ -372,6 +443,7 @@ static struct platform_driver sprd_pmic_eic_driver = {
 	.driver = {
 		.name = "sprd-pmic-eic",
 		.of_match_table	= sprd_pmic_eic_of_match,
+		.pm = pm_sleep_ptr(&sprd_pmic_eic_pm_ops),
 	},
 };
 

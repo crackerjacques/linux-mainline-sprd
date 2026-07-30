@@ -99,4 +99,12 @@ static inline void sprd_msleep(unsigned long ms)
 		msleep(ms);
 }
 
+/*
+ * Replay the digital codec register window from its write-through shadow.
+ * Implemented in sprd-codec.c; called from the vbc side because it must run at a
+ * point where AGCP is provably awake. See OPEN-ITEMS.md section 5.
+ * Returns registers written, or -EAGAIN if the codec is not usable yet.
+ */
+int sprd_codec_restore_digital_regs(void);
+
 #endif /* __SPRD_ASOC_COMMON_H */

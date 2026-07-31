@@ -38,6 +38,25 @@
 			no-map;
 		};
 
+		/*
+		 * DDR belonging to the pm_sys CM4 sensor hub. Stock reserves
+		 * this as one 3MB block (sp_ddr-mem@88000000) because its 5.4
+		 * driver takes the split from the sipc-pmsys smem-info triples
+		 * instead. sprd_pmsys.c wants the two halves as separate
+		 * regions, so split it here - the totals agree exactly, and
+		 * 0x88040000 is also u-boot's DFS_ADDR, the address its Android
+		 * path loads the pm_sys partition to.
+		 */
+		sipc_pmsys_region: smem@88000000 {
+			reg = <0x0 0x88000000 0x0 0x40000>;
+			no-map;
+		};
+
+		pmsys_region: pmsys@88040000 {
+			reg = <0x0 0x88040000 0x0 0x2c0000>;
+			no-map;
+		};
+
 		audiodsp_reserved: audiodsp-mem@89000000 {
 			reg = <0x0 0x89000000 0x0 0x600000>;
 			no-map;
@@ -494,6 +513,68 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
+
+		/*
+		 * CM4 sensor hub. reg is the SP IRAM the bootcode stub is
+		 * poked into - stock exposes the same window as a bare
+		 * sp-iram@dc00 node (aliased iram_reserved) and u-boot writes
+		 * its built-in sp_loader[] array there, which is what
+		 * pm_bootcode.bin is generated from. dma-ranges is the CM4's
+		 * view of the shared DDR and matches the second smem-info
+		 * triple in the stock sipc-pmsys node, 0x88000000 -> 0x18000000.
+		 */
+		pmsys@dc00 {
+			compatible = "sprd,ums512-pmsys";
+			reg = <0x0 0xdc00 0x0 0x2000>;
+			dma-ranges = <0x18000000 0x0 0x88000000 0x08000000>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			sprd,syscon-aon-apb = <&aon_apb_regs>;
+
+			resets = <&pmu_gate RESET_PMU_APB_SP_SYS_SOFT_RST>;
+
+			memory-region = <&pmsys_region>;
+			firmware-name = "sprd/pm_bootcode.bin", "sprd/pm_sys.bin";
+
+			sipc {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				label = "pmsys";
+
+				mboxes = <&mailbox 1>, <&mailbox 6>;
+
+				memory-region = <&sipc_pmsys_region>;
+
+				/*
+				 * Buffer geometry is stock's, whose 5.4 binding
+				 * spells the same channel as an spipe named
+				 * "spipe_pm": ringnr 2, txbuf 0x180, rxbuf 0xb00.
+				 */
+				channel@4 {
+					reg = <4>;
+					sprd,channel-type = "sbuf";
+					sprd,channel-name = "pm_shub";
+					#address-cells = <1>;
+					#size-cells = <1>;
+					sprd,num-buffers = <2>;
+					sprd,tx-buf-size = <0x180>;
+					sprd,rx-buf-size = <0xb00>;
+
+					rpmsg@0 {
+						compatible = "sprd,shub";
+						reg = <0>, <0>;
+						sprd,channel-name = "shub_main";
+					};
+
+					rpmsg@1 {
+						reg = <1>, <1>;
+						sprd,channel-name = "shub_nowakeup";
+					};
+				};
+			};
+		};
 
 		gic: interrupt-controller@12000000 {
 			compatible = "arm,gic-v3";

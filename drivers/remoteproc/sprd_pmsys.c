@@ -209,8 +209,20 @@ static const struct sprd_pmsys_info ums9230_pmsys_info = {
 	.corereset_mask = BIT(0),
 };
 
+/*
+ * ums512 keeps the SP core reset in the same AON_APB bit as ums9230. The
+ * vendor 5.4 DT states it independently - its unisoc,modem node carries
+ * syscon2 = <&aon_apb 0x8c 0x1> under syscon-names "corereset" - so the two
+ * agreeing is a cross-check, not an assumption inherited from ums9230.
+ */
+static const struct sprd_pmsys_info ums512_pmsys_info = {
+	.corereset_reg = 0x008c,
+	.corereset_mask = BIT(0),
+};
+
 static const struct of_device_id sprd_pmsys_of_match[] = {
 	{ .compatible = "sprd,ums9230-pmsys", .data = &ums9230_pmsys_info },
+	{ .compatible = "sprd,ums512-pmsys", .data = &ums512_pmsys_info },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, sprd_pmsys_of_match);

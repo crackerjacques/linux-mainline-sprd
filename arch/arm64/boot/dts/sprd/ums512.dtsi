@@ -47,7 +47,15 @@
 		 * 0x88040000 is also u-boot's DFS_ADDR, the address its Android
 		 * path loads the pm_sys partition to.
 		 */
+		/*
+		 * shared-dma-pool is required, not decoration: the sipc device
+		 * takes this via of_reserved_mem_device_init(), which needs the
+		 * region to have reserved_mem ops and returns -EINVAL without
+		 * them. pmsys_region below deliberately has no compatible - the
+		 * rproc reaches that one through of_reserved_mem_lookup().
+		 */
 		sipc_pmsys_region: smem@88000000 {
+			compatible = "shared-dma-pool";
 			reg = <0x0 0x88000000 0x0 0x40000>;
 			no-map;
 		};
@@ -516,21 +524,25 @@
 
 		/*
 		 * CM4 sensor hub. reg is the SP IRAM the bootcode stub is
-		 * poked into - stock exposes the same window as a bare
-		 * sp-iram@dc00 node (aliased iram_reserved) and u-boot writes
-		 * its built-in sp_loader[] array there, which is what
-		 * pm_bootcode.bin is generated from. dma-ranges is the CM4's
-		 * view of the shared DDR and matches the second smem-info
-		 * triple in the stock sipc-pmsys node, 0x88000000 -> 0x18000000.
+		 * poked into, u-boot's SP_IRAM_ADDR. Do not confuse this with
+		 * stock's sp-iram@dc00 node - that window is smem_ptr[0] of
+		 * the sipc-pmsys smem-info, i.e. shared memory, not the boot
+		 * vector. Writing the stub there leaves the CM4 executing
+		 * whatever its real boot address held: it reports "up" and
+		 * then never opens a SIPC channel.
+		 *
+		 * dma-ranges is the CM4's view of the shared DDR and matches
+		 * the second smem-info triple, 0x88000000 -> 0x18000000.
 		 */
-		pmsys@dc00 {
+		pmsys@800000 {
 			compatible = "sprd,ums512-pmsys";
-			reg = <0x0 0xdc00 0x0 0x2000>;
+			reg = <0x0 0x800000 0x0 0x1000>;
 			dma-ranges = <0x18000000 0x0 0x88000000 0x08000000>;
 			#address-cells = <1>;
 			#size-cells = <1>;
 
 			sprd,syscon-aon-apb = <&aon_apb_regs>;
+			sprd,syscon-pmu-apb = <&pmu_apb_regs>;
 
 			resets = <&pmu_gate RESET_PMU_APB_SP_SYS_SOFT_RST>;
 

@@ -3,6 +3,7 @@
  * Copyright (c) 2024 Otto Pflüger
  */
 
+#include <linux/delay.h>
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of_reserved_mem.h>
@@ -16,6 +17,19 @@
 struct sprd_pmsys_info {
 	u32 corereset_reg;
 	u32 corereset_mask;
+	/*
+	 * Some SoCs leave the whole SP subsystem in reset and in forced deep
+	 * sleep out of AP reset. Its IRAM - the reg window the boot stub is
+	 * written to - does not answer until both are cleared, and touching it
+	 * early hangs the bus rather than failing. Where that applies, these
+	 * describe the two extra controls; sysreset lives in AON_APB next to
+	 * corereset, deepsleep in PMU_APB. Zero means the SoC needs no such
+	 * sequence and no PMU_APB handle.
+	 */
+	u32 sysreset_reg;
+	u32 sysreset_mask;
+	u32 deepsleep_reg;
+	u32 deepsleep_mask;
 };
 
 struct sprd_pmsys {
@@ -23,6 +37,7 @@ struct sprd_pmsys {
 	struct sprd_sipc_subdev sipc;
 	struct reset_control *reset;
 	struct regmap *aon_apb_regs;
+	struct regmap *pmu_apb_regs;
 	const struct sprd_pmsys_info *info;
 	phys_addr_t mem_base;
 	size_t mem_size;
@@ -30,6 +45,67 @@ struct sprd_pmsys {
 	void *bootmem;
 	size_t bootmem_size;
 };
+
+/*
+ * Bring the SP subsystem far enough up that its IRAM is reachable. rproc calls
+ * prepare before load, which is where the boot stub is written, so this has to
+ * happen here rather than in start. The order mirrors u-boot's
+ * pmic_arm7_RAM_active(): SP_SYS out of reset, forced deep sleep cleared, then
+ * CM4_SYS out of reset. The core itself stays in reset until start.
+ */
+static int sprd_pmsys_prepare(struct rproc *rproc)
+{
+	struct sprd_pmsys *p = rproc->priv;
+	int ret;
+
+	if (!p->info->sysreset_mask)
+		return 0;
+
+	/*
+	 * Hold the core first. Its reset state out of AP reset is not
+	 * guaranteed, and once SP_SYS comes up a released core would start
+	 * executing whatever its IRAM happens to hold - before load has put
+	 * the boot stub there.
+	 */
+	ret = regmap_set_bits(p->aon_apb_regs, p->info->corereset_reg,
+			      p->info->corereset_mask);
+	if (ret)
+		return ret;
+
+	ret = reset_control_deassert(p->reset);
+	if (ret < 0)
+		return ret;
+
+	ret = regmap_clear_bits(p->pmu_apb_regs, p->info->deepsleep_reg,
+				p->info->deepsleep_mask);
+	if (ret)
+		return ret;
+
+	ret = regmap_clear_bits(p->aon_apb_regs, p->info->sysreset_reg,
+				p->info->sysreset_mask);
+	if (ret)
+		return ret;
+
+	/* vendor code settles for 50ms before touching the subsystem */
+	msleep(50);
+
+	return 0;
+}
+
+static int sprd_pmsys_unprepare(struct rproc *rproc)
+{
+	struct sprd_pmsys *p = rproc->priv;
+
+	if (!p->info->sysreset_mask)
+		return 0;
+
+	regmap_set_bits(p->aon_apb_regs, p->info->sysreset_reg,
+			p->info->sysreset_mask);
+	regmap_set_bits(p->pmu_apb_regs, p->info->deepsleep_reg,
+			p->info->deepsleep_mask);
+
+	return reset_control_assert(p->reset);
+}
 
 static int sprd_pmsys_load(struct rproc *rproc, const struct firmware *fw)
 {
@@ -99,6 +175,8 @@ static int sprd_pmsys_stop(struct rproc *rproc)
 }
 
 static const struct rproc_ops sprd_pmsys_ops = {
+	.prepare	= sprd_pmsys_prepare,
+	.unprepare	= sprd_pmsys_unprepare,
 	.load		= sprd_pmsys_load,
 	.start		= sprd_pmsys_start,
 	.stop		= sprd_pmsys_stop,
@@ -183,6 +261,14 @@ static int sprd_pmsys_probe(struct platform_device *pdev)
 		return PTR_ERR(p->aon_apb_regs);
 	}
 
+	if (p->info->deepsleep_mask) {
+		p->pmu_apb_regs = syscon_regmap_lookup_by_phandle(dev->of_node,
+								  "sprd,syscon-pmu-apb");
+		if (IS_ERR(p->pmu_apb_regs))
+			return dev_err_probe(dev, PTR_ERR(p->pmu_apb_regs),
+					     "failed to get pmu-apb syscon handle\n");
+	}
+
 	p->reset = devm_reset_control_get_optional(dev, NULL);
 	if (IS_ERR(p->reset)) {
 		dev_err(p->dev, "failed to get pmsys reset\n");
@@ -218,6 +304,12 @@ static const struct sprd_pmsys_info ums9230_pmsys_info = {
 static const struct sprd_pmsys_info ums512_pmsys_info = {
 	.corereset_reg = 0x008c,
 	.corereset_mask = BIT(0),
+	/* AON_APB CM4_SYS_SOFT_RST shares the register with corereset */
+	.sysreset_reg = 0x008c,
+	.sysreset_mask = BIT(4),
+	/* PMU_APB SLEEP_CTRL, the register audcp-boot also uses */
+	.deepsleep_reg = 0x00cc,
+	.deepsleep_mask = BIT(20),
 };
 
 static const struct of_device_id sprd_pmsys_of_match[] = {

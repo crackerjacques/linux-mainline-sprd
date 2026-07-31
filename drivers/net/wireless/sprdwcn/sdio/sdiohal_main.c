@@ -1035,6 +1035,14 @@ static int sdiohal_suspend(struct device *dev)
         goto fail_to_suspend;
     }
 
+	/*
+	 * Only armed on the success path, and mirrored in sdiohal_resume():
+	 * a device whose .suspend fails never reaches dpm_suspended_list, so
+	 * .resume is not called for it and the pair stays balanced.
+	 */
+	if (device_may_wakeup(dev))
+		enable_irq_wake(p_data->irq_num);
+
 	/* WARNING: wait for sending to complete? */
 	pr_info("[%s]done xmit_lock:%d\n", __func__, mutex_is_locked(&p_data->xmit_lock));
 	return 0;
@@ -1074,6 +1082,9 @@ static int sdiohal_resume(struct device *dev)
 	int ret;
 
 	pr_info("[%s]enter xmit_lock:%d\n", __func__, mutex_is_locked(&p_data->xmit_lock));
+
+	if (device_may_wakeup(dev))
+		disable_irq_wake(p_data->irq_num);
 
 	if (WCN_CARD_EXIST(&p_data->xmit_cnt)) {
 		func = container_of(dev, struct sdio_func, dev);
@@ -1216,13 +1227,29 @@ static int sdiohal_probe(struct sdio_func *func,
 
 	sdiohal_set_cp_pin_status();
 
+	/*
+	 * No IRQF_NO_SUSPEND: nothing in sdiohal_suspend() needs this line,
+	 * because it all runs before suspend_device_irqs(). The flag only
+	 * covered the noirq window, where an RX assertion from the CP resumed
+	 * the whole AP -- and, being outside the wakeup accounting, did so
+	 * without ever showing up in /sys/power/pm_wakeup_irq. Let the line
+	 * suspend normally instead; the CP holds it high and the RX thread
+	 * drains it once resume_device_irqs() replays it.
+	 */
 	ret = request_irq(p_data->irq_num, sdiohal_irq_handler,
-			  IRQF_TRIGGER_HIGH | IRQF_NO_SUSPEND,
-			  "sdiohal_irq", &func->dev);
+			  IRQF_TRIGGER_HIGH, "sdiohal_irq", &func->dev);
 	if (ret != 0) {
 		pr_err("request irq err gpio is %d\n", p_data->irq_num);
 		return ret;
 	}
+
+	/*
+	 * Wake-capable but disabled by default, so RX traffic cannot pull the
+	 * device out of deep sleep unless userspace opts in via
+	 * /sys/bus/sdio/devices/.../power/wakeup.
+	 */
+	device_set_wakeup_capable(&func->dev, true);
+	device_wakeup_disable(&func->dev);
 
 	disable_irq(p_data->irq_num);
 	complete(&p_data->scan_done);

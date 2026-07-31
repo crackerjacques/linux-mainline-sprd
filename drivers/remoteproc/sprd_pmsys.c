@@ -62,16 +62,13 @@ static int sprd_pmsys_prepare(struct rproc *rproc)
 		return 0;
 
 	/*
-	 * Hold the core first. Its reset state out of AP reset is not
-	 * guaranteed, and once SP_SYS comes up a released core would start
-	 * executing whatever its IRAM happens to hold - before load has put
-	 * the boot stub there.
+	 * Only ever clear, never assert. Asserting core reset here to hold the
+	 * core while loading looks safe but idles the SP subsystem straight
+	 * into deep sleep (SP_SYS_SLP_STATUS 0 -> 6 in PMU_APB 0xd4), and it
+	 * does not come back - the wake sources are all masked and forcing the
+	 * AHB clock on does not rouse it. The vendor sequence only ever clears
+	 * bits, for what is presumably this reason.
 	 */
-	ret = regmap_set_bits(p->aon_apb_regs, p->info->corereset_reg,
-			      p->info->corereset_mask);
-	if (ret)
-		return ret;
-
 	ret = reset_control_deassert(p->reset);
 	if (ret < 0)
 		return ret;

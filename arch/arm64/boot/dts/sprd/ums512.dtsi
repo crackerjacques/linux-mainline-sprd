@@ -203,6 +203,18 @@
 			 * it serves - a node per cpu would just create
 			 * duplicate devices contending with each other.
 			 */
+			/*
+			 * State is a percentage of injected idle, and
+			 * cpuidle_cooling_runtime() gives a run time of
+			 * idle_us * 100 / state - idle_us, so state 100 means
+			 * *zero* run time and the machine stops dead. The
+			 * cooling maps below therefore cap the upper state
+			 * rather than passing THERMAL_NO_LIMIT.
+			 *
+			 * duration-us matches CORE_PD's min-residency-us so an
+			 * injected idle period is long enough to actually
+			 * enter the deep state rather than just wfi.
+			 */
 			cpu_idle_cooling: thermal-idle {
 				#cooling-cells = <2>;
 				duration-us = <10000>;
@@ -2281,7 +2293,7 @@
 
 					map1 {
 						trip = <&cputop0_alert0>;
-						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT 50>;
 					};
 				};
 			};
@@ -2314,7 +2326,7 @@
 
 					map1 {
 						trip = <&cpu0_alert0>;
-						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT 50>;
 					};
 				};
 			};
@@ -2347,7 +2359,7 @@
 
 					map1 {
 						trip = <&cpu1_alert0>;
-						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT 50>;
 					};
 				};
 			};
@@ -2380,7 +2392,7 @@
 
 					map1 {
 						trip = <&cpu2_alert0>;
-						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT 50>;
 					};
 				};
 			};
@@ -2413,7 +2425,7 @@
 
 					map1 {
 						trip = <&cpu7_alert0>;
-						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT 50>;
 					};
 				};
 			};
@@ -2447,7 +2459,7 @@
 
 					map1 {
 						trip = <&cputop1_alert0>;
-						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT 50>;
 					};
 				};
 			};
@@ -2518,7 +2530,7 @@
 
 					map1 {
 						trip = <&cpu3_alert0>;
-						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT 50>;
 					};
 				};
 			};
@@ -2551,7 +2563,7 @@
 
 					map1 {
 						trip = <&cpu4_alert0>;
-						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT 50>;
 					};
 				};
 			};
@@ -2584,7 +2596,7 @@
 
 					map1 {
 						trip = <&cpu5_alert0>;
-						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT 50>;
 					};
 				};
 			};
@@ -2617,7 +2629,7 @@
 
 					map1 {
 						trip = <&cpu6_alert0>;
-						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT 50>;
 					};
 				};
 			};

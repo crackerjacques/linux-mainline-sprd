@@ -33,124 +33,6 @@
 		#size-cells = <2>;
 		ranges;
 
-		/*
-		 * The vendor sprd_cache_efuse driver reads block n from
-		 * base + 0x4 + n * 4, and its cell offsets are relative to
-		 * that skipped first word. Generic nvmem-rmem has no such
-		 * quirk, so fold the +0x4 into the base and keep the vendor
-		 * cell offsets verbatim - the same thing ums9230.dtsi does.
-		 * Size is the real cache extent: 24 blocks * 4 bytes.
-		 */
-		nvmem@804 {
-			compatible = "sprd,ums512-cache-efuse", "nvmem-rmem";
-			reg = <0 0x804 0 0x60>;
-			no-map;
-
-			nvmem-layout {
-				compatible = "fixed-layout";
-				#address-cells = <1>;
-				#size-cells = <1>;
-
-				uid_start: uid-start@5c {
-					reg = <0x5c 0x4>;
-				};
-
-				uid_end: uid-end@58 {
-					reg = <0x58 0x4>;
-				};
-
-				thm0_sign: thm0-sign@38 {
-					reg = <0x38 0x1>;
-					bits = <0 1>;
-				};
-
-				thm0_ratio: thm0-ratio@38 {
-					reg = <0x38 0x1>;
-					bits = <1 7>;
-				};
-
-				thm0_sen0: thm0-sen0@39 {
-					reg = <0x39 0x1>;
-					bits = <0 8>;
-				};
-
-				thm0_sen1: thm0-sen1@41 {
-					reg = <0x41 0x1>;
-					bits = <0 8>;
-				};
-
-				thm0_sen2: thm0-sen2@40 {
-					reg = <0x40 0x1>;
-					bits = <0 8>;
-				};
-
-				thm0_sen3: thm0-sen3@43 {
-					reg = <0x43 0x1>;
-					bits = <0 8>;
-				};
-
-				thm0_sen4: thm0-sen4@42 {
-					reg = <0x42 0x1>;
-					bits = <0 8>;
-				};
-
-				thm1_sign: thm1-sign@3c {
-					reg = <0x3c 0x1>;
-					bits = <0 1>;
-				};
-
-				thm1_ratio: thm1-ratio@3c {
-					reg = <0x3c 0x1>;
-					bits = <1 7>;
-				};
-
-				thm1_sen0: thm1-sen0@3d {
-					reg = <0x3d 0x1>;
-					bits = <0 8>;
-				};
-
-				thm1_sen1: thm1-sen1@2f {
-					reg = <0x2f 0x1>;
-					bits = <0 8>;
-				};
-
-				thm1_sen2: thm1-sen2@2e {
-					reg = <0x2e 0x1>;
-					bits = <0 8>;
-				};
-
-				thm1_sen3: thm1-sen3@29 {
-					reg = <0x29 0x1>;
-					bits = <0 8>;
-				};
-
-				thm1_sen4: thm1-sen4@28 {
-					reg = <0x28 0x1>;
-					bits = <0 8>;
-				};
-
-				thm1_sen5: thm1-sen4@2b {
-					reg = <0x2b 0x1>;
-					bits = <0 8>;
-				};
-
-				thm2_sign: thm2-sign@3e {
-					reg = <0x3e 0x1>;
-					bits = <0 1>;
-				};
-
-				thm2_ratio: thm2-ratio@3e {
-					reg = <0x3e 0x1>;
-					bits = <1 7>;
-				};
-
-				thm2_sen0: thm2-sen0@3f {
-					reg = <0x3f 0x1>;
-					bits = <0 8>;
-				};
-			};
-		};
-
 		audio_reserved: audio-mem@87400000 {
 			reg = <0x0 0x87400000 0x0 0x400000>;
 			no-map;
@@ -308,6 +190,25 @@
 			capacity-dmips-mhz = <544>;
 			dynamic-power-coefficient = <102>;
 			#cooling-cells = <2>;
+
+			/*
+			 * Throttle by injecting idle rather than by scaling
+			 * frequency: the vendor hw dvfs block accepts a work
+			 * index but never applies it (state stays IDLE, voted
+			 * volt reads 0), so the cpufreq cooling devices above
+			 * are inert on this platform.
+			 *
+			 * cpuidle_cooling_register() injects across the whole
+			 * cpuidle driver cpumask, so one node covers every cpu
+			 * it serves - a node per cpu would just create
+			 * duplicate devices contending with each other.
+			 */
+			cpu_idle_cooling: thermal-idle {
+				#cooling-cells = <2>;
+				duration-us = <10000>;
+				/* >= CORE_PD exit-latency-us so it can be used */
+				exit-latency-us = <4000>;
+			};
 		};
 
 		CPU1: cpu@100 {
@@ -598,6 +499,132 @@
 			compatible = "sprd,ums512-glbregs", "syscon",
 				     "simple-mfd";
 			reg = <0 0x31050000 0 0x9000>;
+		};
+
+		/*
+		 * Real eFuse controller. The vendor dts also carries a
+		 * cache_efuse@800 rmem shadow that the bootloader is meant to
+		 * populate; our u-boot does not, so reading it returned noise
+		 * and every thermal sensor got a garbage trim. Read the fuses
+		 * directly instead.
+		 *
+		 * Cell offsets are the vendor ones verbatim: sprd-efuse adds
+		 * SPRD_EFUSE_NORMAL_BLOCK_OFFSET (72) itself, so nvmem offset 0
+		 * is normal block 0 - the same base the cache offsets used.
+		 */
+		ap_efuse: efuse@32240000 {
+			compatible = "sprd,ums312-efuse";
+			reg = <0 0x32240000 0 0x10000>;
+			clock-names = "enable";
+			clocks = <&aonapb_gate CLK_EFUSE_EB>;
+			hwlocks = <&hwlock 8>;
+
+			nvmem-layout {
+				compatible = "fixed-layout";
+				#address-cells = <1>;
+				#size-cells = <1>;
+
+				uid_start: uid-start@5c {
+					reg = <0x5c 0x4>;
+				};
+
+				uid_end: uid-end@58 {
+					reg = <0x58 0x4>;
+				};
+
+				thm0_sign: thm0-sign@38 {
+					reg = <0x38 0x1>;
+					bits = <0 1>;
+				};
+
+				thm0_ratio: thm0-ratio@38 {
+					reg = <0x38 0x1>;
+					bits = <1 7>;
+				};
+
+				thm0_sen0: thm0-sen0@39 {
+					reg = <0x39 0x1>;
+					bits = <0 8>;
+				};
+
+				thm0_sen1: thm0-sen1@41 {
+					reg = <0x41 0x1>;
+					bits = <0 8>;
+				};
+
+				thm0_sen2: thm0-sen2@40 {
+					reg = <0x40 0x1>;
+					bits = <0 8>;
+				};
+
+				thm0_sen3: thm0-sen3@43 {
+					reg = <0x43 0x1>;
+					bits = <0 8>;
+				};
+
+				thm0_sen4: thm0-sen4@42 {
+					reg = <0x42 0x1>;
+					bits = <0 8>;
+				};
+
+				thm1_sign: thm1-sign@3c {
+					reg = <0x3c 0x1>;
+					bits = <0 1>;
+				};
+
+				thm1_ratio: thm1-ratio@3c {
+					reg = <0x3c 0x1>;
+					bits = <1 7>;
+				};
+
+				thm1_sen0: thm1-sen0@3d {
+					reg = <0x3d 0x1>;
+					bits = <0 8>;
+				};
+
+				thm1_sen1: thm1-sen1@2f {
+					reg = <0x2f 0x1>;
+					bits = <0 8>;
+				};
+
+				thm1_sen2: thm1-sen2@2e {
+					reg = <0x2e 0x1>;
+					bits = <0 8>;
+				};
+
+				thm1_sen3: thm1-sen3@29 {
+					reg = <0x29 0x1>;
+					bits = <0 8>;
+				};
+
+				thm1_sen4: thm1-sen4@28 {
+					reg = <0x28 0x1>;
+					bits = <0 8>;
+				};
+
+				/* vendor names this thm1-sen4@2b; renamed to
+				 * avoid two cells called thm1-sen4.
+				 */
+				thm1_sen5: thm1-sen5@2b {
+					reg = <0x2b 0x1>;
+					bits = <0 8>;
+				};
+
+				thm2_sign: thm2-sign@3e {
+					reg = <0x3e 0x1>;
+					bits = <0 1>;
+				};
+
+				thm2_ratio: thm2-ratio@3e {
+					reg = <0x3e 0x1>;
+					bits = <1 7>;
+				};
+
+				thm2_sen0: thm2-sen0@3f {
+					reg = <0x3f 0x1>;
+					bits = <0 8>;
+				};
+			};
 		};
 
 		topdvfs_controller: top_dvfs_apb_regs: syscon@322a0000 {
@@ -1312,6 +1339,7 @@
 			power-domains = <&pmu UMS512_POWER_DOMAIN_GPU_TOP>;
 			resets = <&gpu_clk RESET_GPU_APB_GPU_CORE_SOFT_RST>;
 			operating-points-v2 = <&gpu_opp_table>;
+			#cooling-cells = <2>;
 
 			status = "disabled";
 		};
@@ -2221,6 +2249,7 @@
 		thermal-zones {
 			cputop0-thermal {
 				polling-delay-passive = <100>;
+				polling-delay = <1000>;
 
 				thermal-sensors = <&ap_thm0 0>;
 
@@ -2249,11 +2278,17 @@
 						 */
 						cooling-device = <&CPU0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
 					};
+
+					map1 {
+						trip = <&cputop0_alert0>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+					};
 				};
 			};
 
 			ank0-thermal {
 				polling-delay-passive = <100>;
+				polling-delay = <1000>;
 
 				thermal-sensors = <&ap_thm0 3>;
 
@@ -2276,11 +2311,17 @@
 						trip = <&cpu0_alert0>;
 						cooling-device = <&CPU0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
 					};
+
+					map1 {
+						trip = <&cpu0_alert0>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+					};
 				};
 			};
 
 			ank1-thermal {
 				polling-delay-passive = <100>;
+				polling-delay = <1000>;
 
 				thermal-sensors = <&ap_thm0 4>;
 
@@ -2303,11 +2344,17 @@
 						trip = <&cpu1_alert0>;
 						cooling-device = <&CPU0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
 					};
+
+					map1 {
+						trip = <&cpu1_alert0>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+					};
 				};
 			};
 
 			ank2-thermal {
 				polling-delay-passive = <100>;
+				polling-delay = <1000>;
 
 				thermal-sensors = <&ap_thm1 1>;
 
@@ -2330,11 +2377,17 @@
 						trip = <&cpu2_alert0>;
 						cooling-device = <&CPU0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
 					};
+
+					map1 {
+						trip = <&cpu2_alert0>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+					};
 				};
 			};
 
 			prometheus7-thermal {
 				polling-delay-passive = <100>;
+				polling-delay = <1000>;
 
 				thermal-sensors = <&ap_thm0 2>;
 
@@ -2357,11 +2410,17 @@
 						trip = <&cpu7_alert0>;
 						cooling-device = <&CPU6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
 					};
+
+					map1 {
+						trip = <&cpu7_alert0>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+					};
 				};
 			};
 
 			cputop1-thermal {
 				polling-delay-passive = <100>;
+				polling-delay = <1000>;
 
 				thermal-sensors = <&ap_thm0 1>;
 
@@ -2385,13 +2444,44 @@
 						/* CPU6 = big cluster leader (cpu6-7 share a clock). */
 						cooling-device = <&CPU6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
 					};
+
+					map1 {
+						trip = <&cputop1_alert0>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+					};
 				};
 			};
 
 			gpu-thermal {
 				polling-delay-passive = <100>;
+				polling-delay = <1000>;
 
 				thermal-sensors = <&ap_thm1 0>;
+
+				trips {
+					gpu_alert0: trip-point0 {
+						temperature = <70000>;
+						hysteresis = <1000>;
+						type = "passive";
+					};
+
+					gpu_critical: gpu-crit {
+						temperature = <110000>;
+						hysteresis = <2000>;
+						type = "critical";
+					};
+				};
+
+				cooling-maps {
+					map0 {
+						trip = <&gpu_alert0>;
+						/*
+						 * panfrost registers devfreq cooling for
+						 * the gpu's opp table (devfreq-60000000.gpu).
+						 */
+						cooling-device = <&gpu THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+					};
+				};
 			};
 
 			gpuank2_thmzone: gpuank2-thmzone {
@@ -2402,6 +2492,7 @@
 
 			ank3-thermal {
 				polling-delay-passive = <100>;
+				polling-delay = <1000>;
 
 				thermal-sensors = <&ap_thm1 2>;
 
@@ -2424,11 +2515,17 @@
 						trip = <&cpu3_alert0>;
 						cooling-device = <&CPU0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
 					};
+
+					map1 {
+						trip = <&cpu3_alert0>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+					};
 				};
 			};
 
 			ank4-thermal {
 				polling-delay-passive = <100>;
+				polling-delay = <1000>;
 
 				thermal-sensors = <&ap_thm1 3>;
 
@@ -2451,11 +2548,17 @@
 						trip = <&cpu4_alert0>;
 						cooling-device = <&CPU0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
 					};
+
+					map1 {
+						trip = <&cpu4_alert0>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+					};
 				};
 			};
 
 			ank5-thermal {
 				polling-delay-passive = <100>;
+				polling-delay = <1000>;
 
 				thermal-sensors = <&ap_thm1 4>;
 
@@ -2478,11 +2581,17 @@
 						trip = <&cpu5_alert0>;
 						cooling-device = <&CPU0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
 					};
+
+					map1 {
+						trip = <&cpu5_alert0>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+					};
 				};
 			};
 
 			prometheus6-thermal {
 				polling-delay-passive = <100>;
+				polling-delay = <1000>;
 
 				thermal-sensors = <&ap_thm1 5>;
 
@@ -2504,6 +2613,11 @@
 					map0 {
 						trip = <&cpu6_alert0>;
 						cooling-device = <&CPU6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+					};
+
+					map1 {
+						trip = <&cpu6_alert0>;
+						cooling-device = <&cpu_idle_cooling THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
 					};
 				};
 			};

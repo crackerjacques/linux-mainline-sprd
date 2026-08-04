@@ -63,6 +63,22 @@
             no-map;
         };
 
+		/*
+		 * Secure/DRM pool. Stock declares this in a devicetree overlay
+		 * (fragment@12) rather than the base dts, so it is easy to miss
+		 * when porting: see docs/decomp_overlay.dts.
+		 *
+		 * The secure world writes this region whether or not the kernel
+		 * knows about it. Leaving it unreserved lets the page allocator
+		 * hand it to userspace, and the pages are then zeroed underneath
+		 * their owner -- which looks exactly like memory corruption once
+		 * an allocation grows past ~1.5G and starts reaching 0xe3800000.
+		 */
+		widevine-mem@e3800000 {
+			reg = <0 0xe3800000 0 0xc800000>;
+			no-map;
+		};
+
 		linux,cma {
 			compatible = "shared-dma-pool";
 			size = <0x0 0x8000000>;

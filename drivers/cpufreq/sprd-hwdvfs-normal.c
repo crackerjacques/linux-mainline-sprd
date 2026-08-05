@@ -2827,12 +2827,14 @@ static int sprd_cpudvfs_common_init(struct cpudvfs_archdata *pdev)
 	}
 
 	for (ix = 0; ix < pdev->mpll_num; ++ix) {
-		ret = pdev->phy_ops->mpll_relock_enable(pdev, ix, true);
-		if (ret)
-			return ret;
-		ret = pdev->phy_ops->mpll_pd_enable(pdev, ix, true);
-		if (ret)
-			return ret;
+		/*
+		 * Hand the MPLL output over to DVFS control before enabling
+		 * auto relock and auto power down. The vendor 5.4 driver
+		 * (sprd_mpll_output_source_switch) does the switch first and
+		 * waits for the analog side to settle; doing it afterwards
+		 * leaves the frequency-update state machine parked, so the
+		 * clock never leaves its TWPLL boot parent.
+		 */
 		addr = pdev->mplls[ix].anag_reg;
 		bit = (1 << pdev->mplls[ix].POST_DIV) |
 		      (1 << pdev->mplls[ix].ICP) |
@@ -2843,6 +2845,16 @@ static int sprd_cpudvfs_common_init(struct cpudvfs_archdata *pdev)
 			pr_err("Error in configuring MPLL\n");
 			return ret;
 		}
+
+		/* Wait for the analog configuration to finish */
+		udelay(50);
+
+		ret = pdev->phy_ops->mpll_relock_enable(pdev, ix, true);
+		if (ret)
+			return ret;
+		ret = pdev->phy_ops->mpll_pd_enable(pdev, ix, true);
+		if (ret)
+			return ret;
 
 		/* Need to init mpll index table if necessary */
 		ret = pdev->phy_ops->mpll_index_table_init(pdev, ix);

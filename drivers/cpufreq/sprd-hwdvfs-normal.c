@@ -358,9 +358,11 @@ int host_cluster_auto_tuning_enable(void *clu, bool enable)
 
 	/*
 	 * Enable TOP DVFS to change voltage dynamically. These bits are
-	 * active-low: CLEAR to enable, SET to disable. Confirmed against the
-	 * vendor sprd-top-dvfs.c (dcdc_pwr_dvfs_enable/subsys_dvfs_tune_enable,
-	 * identical logic in both the 4.14 and 5.4 trees) and live on-device:
+	 * active-low: CLEAR to enable, SET to disable. Confirmed against
+	 * vendor/linux-kernel-5-4-ums512/drivers/devfreq/sprd-top-dvfs.c
+	 * (dcdc_pwr_dvfs_enable/subsys_dvfs_tune_enable; identical logic in
+	 * every other vendor tree checked, 4.14 and 5.4 alike) and live
+	 * on-device:
 	 * clearing these bits was the first thing in this driver's history to
 	 * move MPLL_DVFS_STATE/CGM_CFG_DBG0 off their permanently-frozen boot
 	 * values. The dts third cell (dvfs_eb / subsys_tune_eb) only gates

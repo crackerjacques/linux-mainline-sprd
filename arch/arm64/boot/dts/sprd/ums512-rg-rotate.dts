@@ -362,11 +362,6 @@
 		pins = "UMS512_SDA3", "UMS512_SCL3";
 		function = "func4";
 	};
-};
-
-&cpudvfs_dev {
-	pinctrl-names = "default";
-	pinctrl-0 = <&dvfs_i2c_pin_func>;
 
 	joypad_pins_func: joypad-pins-func {
 		pins = "UMS512_RFSDA0", "UMS512_RFSCK0", "UMS512_RFSEN0",
@@ -406,6 +401,11 @@
 		input-enable;
 		bias-pull-up = <20000>;
 	};
+};
+
+&cpudvfs_dev {
+	pinctrl-names = "default";
+	pinctrl-0 = <&dvfs_i2c_pin_func>;
 };
 
 &iommu_disp {

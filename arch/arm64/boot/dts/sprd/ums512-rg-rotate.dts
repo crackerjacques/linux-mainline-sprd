@@ -352,6 +352,22 @@
         function = "func4";
     };
 
+	/*
+	 * Stock hogs SDA3/SCL3 at func4 (overlay pinctrl): routes the pads to
+	 * the TOP-DVFS engine's autonomous I2C channel to the FAN53555
+	 * (DCDC_CPU1). Ours booted at func1, one suspect for the I2C voltage
+	 * transaction never firing. Applied via cpudvfs_dev probe.
+	 */
+	dvfs_i2c_pin_func: dvfs-i2c-pin-func {
+		pins = "UMS512_SDA3", "UMS512_SCL3";
+		function = "func4";
+	};
+};
+
+&cpudvfs_dev {
+	pinctrl-names = "default";
+	pinctrl-0 = <&dvfs_i2c_pin_func>;
+
 	joypad_pins_func: joypad-pins-func {
 		pins = "UMS512_RFSDA0", "UMS512_RFSCK0", "UMS512_RFSEN0",
 		       "UMS512_RFSEN1", "UMS512_RFCTL6", "UMS512_RFCTL7",

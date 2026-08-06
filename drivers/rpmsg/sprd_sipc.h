@@ -59,6 +59,8 @@ enum {
 	SMSG_TYPE_EVENT,
 	SMSG_TYPE_CMD,
 	SMSG_TYPE_DONE,
+	SMSG_TYPE_DFS = 13,
+	SMSG_TYPE_DFS_RSP = 14,
 };
 
 int __sipc_send(struct sprd_sipc *sipc, u8 channel, u8 type, u16 cmd,
@@ -90,6 +92,7 @@ struct rpmsg_endpoint *sipc_create_ept(struct sprd_sipc *sipc,
 				       struct rpmsg_channel_info *chinfo);
 
 int sipc_sbuf_init(struct sipc_channel *channel);
+int sipc_dfs_init(struct sipc_channel *channel);
 int sipc_sblock_init(struct sipc_channel *channel);
 
 struct sipc_sipx *sipx_init(struct device *parent);

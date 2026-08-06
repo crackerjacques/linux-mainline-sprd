@@ -276,6 +276,8 @@ static int sipc_populate(struct sprd_sipc *sipc)
 
 		if (!strcmp(chtype, "sbuf")) {
 			ret = sipc_sbuf_init(channel);
+		} else if (!strcmp(chtype, "dfs")) {
+			ret = sipc_dfs_init(channel);
 		} else if (!strcmp(chtype, "sblock")) {
 			ret = sipc_sblock_init(channel);
 		} else if (!strcmp(chtype, "sipx")) {

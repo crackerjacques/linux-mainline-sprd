@@ -587,6 +587,58 @@
 				};
 
 				/*
+				 * pm_sys console log, stock's "slog_pm".
+				 * Receive-only; the rx ring carries the SP
+				 * firmware's own printf output.
+				 */
+				channel@5 {
+					reg = <5>;
+					sprd,channel-type = "sbuf";
+					sprd,channel-name = "slog_pm";
+					#address-cells = <1>;
+					#size-cells = <1>;
+					sprd,tx-buf-size = <0x0>;
+					sprd,rx-buf-size = <0x500>;
+
+					rpmsg@0 {
+						reg = <0>, <0>;
+						sprd,channel-name = "slog_pm";
+					};
+				};
+
+				/* Sleep/power control pipe, stock's "sctl_pm". */
+				channel@6 {
+					reg = <6>;
+					sprd,channel-type = "sbuf";
+					sprd,channel-name = "sctl_pm";
+					#address-cells = <1>;
+					#size-cells = <1>;
+					sprd,tx-buf-size = <0x20>;
+					sprd,rx-buf-size = <0x40>;
+
+					rpmsg@0 {
+						reg = <0>, <0>;
+						sprd,channel-name = "sctl_pm";
+					};
+				};
+
+				/* AP time sync to the SP, stock's "stime_pm". */
+				channel@29 {
+					reg = <41>;
+					sprd,channel-type = "sbuf";
+					sprd,channel-name = "stime_pm";
+					#address-cells = <1>;
+					#size-cells = <1>;
+					sprd,tx-buf-size = <0x80>;
+					sprd,rx-buf-size = <0x40>;
+
+					rpmsg@0 {
+						reg = <0>, <0>;
+						sprd,channel-name = "stime_pm";
+					};
+				};
+
+				/*
 				 * Raw smsg control channel to the pm_sys DFS
 				 * task (vendor SMSG_CH_PM_CTRL). No shared
 				 * memory behind it - bare 8-byte smsgs with

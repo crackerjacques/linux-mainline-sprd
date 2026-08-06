@@ -540,9 +540,13 @@ static int sprd_cpu_binning_parse(struct sprd_cpufreq_info *info)
 	dev_dbg(info->pdev, "opp name after cpu bin parsed: %s\n",
 		clu->opp_name);
 
+	/*
+	 * Do not of_node_put(info->cpufreq_np) here (vendor code did):
+	 * info_init() already balanced its reference and the node stays
+	 * cached in info for later opp updates; the extra put underflows
+	 * the refcount on every policy init.
+	 */
 out:
-	of_node_put(info->cpufreq_np);
-
 	return ret;
 }
 

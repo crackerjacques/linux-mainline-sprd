@@ -393,6 +393,42 @@ int sprd_dvfs_third_pmic_enable(struct cpudvfs_device *pdev, u32 num)
 	return 0;
 }
 
+/*
+ * Interim rg-rotate workaround: the DCDC_CPU1 I2C channel to the FAN53555
+ * never completes a transaction (no CURRENT_VOLTAGE readback, STATE_I2C
+ * parks at 4 waiting for voltage-meet), which freezes the frequency arm at
+ * the boot index. The rail powers up at its top voltage grade, so bypassing
+ * the voltage-meet wait yields full frequency scaling at a statically-high
+ * voltage. Drop this (clear the archdata vol_meet_byp_cfg) once the
+ * pm_sys/SP-serviced I2C channel really tunes the rail.
+ */
+static
+int sprd_dvfs_vol_meet_bypass(struct cpudvfs_device *pdev, u32 num)
+{
+	struct topdvfs_volt_manager *manager = pdev->priv->volt_manager;
+	struct reg_info *regdata;
+
+	if (num >= pdev->dcdc_num) {
+		dev_err(pdev->dev, "incorrect dcdc id(%d)\n", num);
+		return -EINVAL;
+	}
+
+	if (!manager->vol_meet_byp_cfg)
+		return 0;
+
+	regdata = &manager->vol_meet_byp_cfg[num];
+	if (!regdata->msk || !pdev->pwr[num].i2c_used)
+		return 0;
+
+	dev_info(pdev->dev,
+		 "bypassing voltage-meet for dcdc%d (rail pinned at boot voltage)\n",
+		 num);
+
+	return regmap_update_bits(pdev->topdvfs_map, regdata->reg,
+				  regdata->msk << regdata->off,
+				  BIT(regdata->off));
+}
+
 static
 int sprd_dvfs_block_dcdc_shutdown_enable(struct cpudvfs_device *pdev, u32 num)
 {
@@ -915,6 +951,13 @@ static int sprd_dvfs_device_init(struct cpudvfs_device *pdev)
 		ret = sprd_dvfs_third_pmic_enable(pdev, ix);
 		if (ret) {
 			dev_err(pdev->dev, "failed to select the third pmic when the third pmic is used for dcdc%d\n",
+				ix);
+			return ret;
+		}
+
+		ret = sprd_dvfs_vol_meet_bypass(pdev, ix);
+		if (ret) {
+			dev_err(pdev->dev, "failed to set voltage-meet bypass for dcdc%d\n",
 				ix);
 			return ret;
 		}

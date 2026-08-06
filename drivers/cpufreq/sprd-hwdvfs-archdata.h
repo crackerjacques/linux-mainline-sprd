@@ -109,6 +109,16 @@ struct  topdvfs_volt_manager {
 	struct reg_info *idle_vol_cfg;
 	struct reg_info *misc_cfg;
 	struct reg_info *third_pmic_cfg;
+	/*
+	 * Optional per-DCDC VOLTAGE_MEET bypass. On rg-rotate the DCDC_CPU1
+	 * I2C channel to the FAN53555 never completes (no CURRENT_VOLTAGE
+	 * readback, STATE_I2C parks at 4), which freezes the frequency arm
+	 * at the boot index. The rail powers up at its top grade, so
+	 * bypassing the voltage-meet wait gives full frequency scaling at a
+	 * statically-high voltage. Remove once the pm_sys/SIPC-serviced I2C
+	 * channel actually works.
+	 */
+	struct reg_info *vol_meet_byp_cfg;
 	u32 dcdc_num, vir_dcdc_adi_num;
 };
 

@@ -219,15 +219,39 @@ config ARM_SPRD_CPUFREQ_V2
 	help
 	  This adds the CPUFreq driver support for Spreadtrum/Unisoc SoCs.
 
-config ARM_SPRD_CPUFREQ_HW
-	bool "Spreadtrum/Unisoc register-level hardware CPUFreq support"
+config ARM_SPRD_HW_CPUFREQ_NORMAL
+	bool "Sprd apcpu hardware dvfs driver for sharkl5 family SOCs"
+	depends on ARCH_SPRD || COMPILE_TEST
+	select PM_OPP
+	help
+	  This driver enable hardware to adjust the voltage and frequency
+	  automatically for DSU cluster and cores in sharkl5 and the platforms
+	  whose apcpu hardware DVFS IP is similar to sharkl5.
+
+	  If in doubt, say N.
+
+config ARM_SPRD_HW_CPUFREQ_ARCH_UMS512
+	bool "SPRD UMS512 HW DVFS Driver"
+	depends on ARM_SPRD_HW_CPUFREQ_NORMAL
+	help
+	  This includes SPRD UMS512 HW DVFS Architecture-dependent Driver
+
+	  If in doubt, say N.
+
+config ARM_SPRD_CPUFREQ_PUBLIC
+	bool "SPRD CPUfreq Driver Public Data"
+	help
+	  This includes all SPRD cpufreq driver public data, including but
+	  not limted to the EXPORT SYMBOL with the same name.
+
+	  If in doubt, say N.
+
+config ARM_SPRD_TOP_DVFS
+	bool "Spreadtrum/Unisoc TOP DVFS subsystem-DCDC driver"
 	depends on ARCH_SPRD || COMPILE_TEST
 	help
-	  This adds the register-level (hwdvfs) CPUFreq driver support for
-	  Spreadtrum/Unisoc sharkl5pro-family SoCs (e.g. UMS512/T618), where
-	  the firmware does not provide the SIP DVFS service used by the v2
-	  driver and DVFS must be driven directly via the cpudvfs/topdvfs
-	  registers.
+	  This drives the TOP DVFS controller's subsystem/device DCDC voltage
+	  management (non-CPU rails) on sharkl5pro-family SoCs.
 
 config ARM_STI_CPUFREQ
 	tristate "STi CPUFreq support"

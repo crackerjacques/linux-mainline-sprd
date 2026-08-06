@@ -703,7 +703,9 @@
 		};
 
 		topdvfs_controller: top_dvfs_apb_regs: syscon@322a0000 {
-			compatible = "sprd,sharkl5pro-topdvfs",
+			compatible = "sprd,sharkl5pro-topdvfs-dev",
+				     "sprd,topdvfs-dev",
+				     "sprd,sharkl5pro-topdvfs",
 				     "sprd,ums512-glbregs", "syscon";
 			reg = <0 0x322a0000 0 0x8000>;
 			sprd,syscon-enable = <&aon_apb_regs>;
@@ -723,6 +725,17 @@
 				dcdc-judge-vol-sw = <0x138 15 0x7 0>;
 				dcdc-subsys-tune-enable = <0x150 7 1>;
 				dcdc-idle-voltage = <0x16c 0 0x7 5>;
+				/*
+				 * NB: stock also sets DVFS_BLOCK_SHUTDOWN via a
+				 * "dvfs-blk-dcdc-sd = <&pmu_apb_regs 0x4fc 0x2>"
+				 * property here (PMU 0x4fc bit1; whole reg = 0x3 on
+				 * a working Android). Deliberately omitted: adding
+				 * it stalls our early boot (see the A75-DVFS memory
+				 * note). It is not sufficient for A75 hw DVFS on its
+				 * own and needs a power-sequencing prerequisite we
+				 * have not yet ported; revisit with the top-dvfs
+				 * subsystem work.
+				 */
 			};
 
 			dcdc_mm: dcdc-mm {
@@ -732,13 +745,15 @@
 						<&gpu_sys>,
 						<&mm_sys>;
 				audcp_sys: audcp-sys {
-					dcdc-subsys-tune-enable = <0x150 5 1>;
+					/* stock: eb=0 -> bit5 set in 0x150 */
+					dcdc-subsys-tune-enable = <0x150 5 0>;
 				};
 				gpu_sys: gpu-sys {
 					dcdc-subsys-tune-enable = <0x150 1 1>;
 				};
 				mm_sys: mm-sys {
-					dcdc-subsys-tune-enable = <0x150 2 1>;
+					/* stock: eb=0 -> bit2 set in 0x150 */
+					dcdc-subsys-tune-enable = <0x150 2 0>;
 				};
 			};
 

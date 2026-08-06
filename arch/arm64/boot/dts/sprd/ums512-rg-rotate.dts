@@ -353,14 +353,19 @@
     };
 
 	/*
-	 * Stock hogs SDA3/SCL3 at func4 (overlay pinctrl): routes the pads to
-	 * the TOP-DVFS engine's autonomous I2C channel to the FAN53555
-	 * (DCDC_CPU1). Ours booted at func1, one suspect for the I2C voltage
-	 * transaction never firing. Applied via cpudvfs_dev probe.
+	 * SDA3/SCL3 carry the TOP-DVFS engine's autonomous I2C channel to
+	 * the FAN53555 (DCDC_CPU1). Live stock Android has these pads at
+	 * func-sel 0 ("func1"), the same value as every other real I2C pad
+	 * (SCL0/SDA0, SCL1/SDA1, SCL6/SDA6) - see
+	 * docs/dvfs-working-regmaps/stock_pinconf_pins.txt. The earlier
+	 * func4 setting here (a misread of the stock DT overlay) routed the
+	 * pads AWAY from the I2C function, so the engine's FAN53555
+	 * transaction never reached the wire and DCDC_CPU1 parked at
+	 * STATE_I2C=4. Applied via cpudvfs_dev probe.
 	 */
 	dvfs_i2c_pin_func: dvfs-i2c-pin-func {
 		pins = "UMS512_SDA3", "UMS512_SCL3";
-		function = "func4";
+		function = "func1";
 	};
 
 	joypad_pins_func: joypad-pins-func {

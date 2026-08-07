@@ -292,11 +292,6 @@ static struct reg_info ums512_third_pmic_cfg[DCDC_NUM] = {
 	[DCDC_CPU1] = GENREGSET(0x120, 0, 0x1),
 };
 
-/* DCDC_CPU1_VOLTAGE_JUDGE_BYPASS: PROMETHEUS_VOLTAGE_MEET_BYP */
-static struct reg_info ums512_vol_meet_byp_cfg[DCDC_NUM] = {
-	[DCDC_CPU1] = GENREGSET(0x98, 0, 0x1),
-};
-
 static struct reg_info ums512_host_vol_auto_tune_cfg[DCDC_NUM] = {
 	[DCDC_CPU0] = GENREGVALSET(0x68, 20, 0x1, 0),
 	[DCDC_CPU1] = GENREGVALSET(0x94, 0, 0x1, 0),
@@ -460,7 +455,6 @@ static struct topdvfs_volt_manager ums512_volt_manager = {
 	.idle_vol_cfg = ums512_idle_vol_cfg,
 	.misc_cfg = ums512_volt_misc_cfg,
 	.third_pmic_cfg = ums512_third_pmic_cfg,
-	.vol_meet_byp_cfg = ums512_vol_meet_byp_cfg,
 	.dcdc_num = DCDC_NUM,
 	.vir_dcdc_adi_num = VIR_DCDC_CPU_ADI_NUM,
 };

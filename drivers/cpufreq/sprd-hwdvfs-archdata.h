@@ -118,7 +118,6 @@ struct  topdvfs_volt_manager {
 	 * statically-high voltage. Remove once the pm_sys/SIPC-serviced I2C
 	 * channel actually works.
 	 */
-	struct reg_info *vol_meet_byp_cfg;
 	u32 dcdc_num, vir_dcdc_adi_num;
 };
 

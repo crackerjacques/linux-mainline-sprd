@@ -41,6 +41,44 @@
 		#size-cells = <2>;
 		ranges;
 
+		/*
+		 * ddrbist + sysdumpinfo: the first two pages of DRAM. u-boot
+		 * and the sysdump machinery stamp magic values here across
+		 * reboots (see SPRD_SYSDUMP_MAGIC notes).
+		 */
+		ddrbist-mem@80000000 {
+			reg = <0 0x80000000 0 0x1000>;
+			no-map;
+		};
+
+		sysdumpinfo-mem@80001000 {
+			reg = <0 0x80001000 0 0x1000>;
+			no-map;
+		};
+
+		/* Modem CP image + CP/AP SIPC shared memory. The CP is not
+		 * started under mainline, but stock reserves both and the
+		 * boot chain may still touch them - keep them out of the
+		 * allocator. */
+		cp-mem@89600000 {
+			reg = <0 0x89600000 0 0x4900000>;
+			no-map;
+		};
+
+		sipc-mem@8e000000 {
+			reg = <0 0x8e000000 0 0x900000>;
+			no-map;
+		};
+
+		/* Stock base DT reserves this 64MB IQ/calibration buffer but
+		 * frees it at runtime outside calibration mode, so it is
+		 * missing from the live-booted reference tree. Reserved here
+		 * while hunting corruption; candidate to reclaim later. */
+		iq-mem@90000000 {
+			reg = <0 0x90000000 0 0x4000000>;
+			no-map;
+		};
+
 		sml-mem@94000000 {
 			reg = <0 0x94000000 0 0x40000>;
 			no-map;
@@ -56,12 +94,36 @@
 			no-map;
 		};
 
+		/* u-boot console log capture (read back via pstore/ramoops
+		 * tooling); u-boot writes here unconditionally. */
+		uboot-log@9de80000 {
+			reg = <0 0x9de80000 0 0x80000>;
+			no-map;
+		};
+
         framebuffer_region: framebuffer-region@9e000000 {
             compatible = "framebuffer";
             reg = <0 0x9e000000 0 (720 * 720 * 4)>;
             iommu-addresses = <&dpu 0x9e000000 (720 * 720 * 4)>;
             no-map;
         };
+
+		/* Remainder of stock's logobuffer@9e000000 (0x9e4000 total);
+		 * the framebuffer node above only covers the panel-sized
+		 * slice u-boot actually scans out. */
+		logobuffer-tail@9e1fa400 {
+			reg = <0 0x9e1fa400 0 0x7e9c00>;
+			no-map;
+		};
+
+		/* Stock base DT reserves 16MB here for u-boot sysdump; the
+		 * live tree shows it zero-sized because u-boot rewrites the
+		 * node, but the region may still be stamped by the boot
+		 * chain. Reserved while hunting corruption. */
+		sysdump-uboot@9f000000 {
+			reg = <0 0x9f000000 0 0x1000000>;
+			no-map;
+		};
 
 		/*
 		 * Secure/DRM pool. Stock declares this in a devicetree overlay
@@ -77,6 +139,35 @@
 		widevine-mem@e3800000 {
 			reg = <0 0xe3800000 0 0xc800000>;
 			no-map;
+		};
+
+		/* Camera faceid + vDSP firmware regions. High DRAM - if left
+		 * unreserved these are exactly where big allocations (page
+		 * cache on large files) start landing and getting corrupted. */
+		faceid-mem@fd270000 {
+			reg = <0 0xfd270000 0 0x500000>;
+			no-map;
+		};
+
+		vdsp-mem@fd770000 {
+			reg = <0 0xfd770000 0 0x2800000>;
+			no-map;
+		};
+
+		rebootescrow@fff70000 {
+			reg = <0 0xfff70000 0 0x10000>;
+			no-map;
+		};
+
+		/* Persistent kernel console/oops log, same layout as stock so
+		 * u-boot's uboot_log dumper keeps working. No no-map: ramoops
+		 * needs to map it. */
+		ramoops@fff80000 {
+			compatible = "ramoops";
+			reg = <0 0xfff80000 0 0x40000>;
+			record-size = <0x8000>;
+			console-size = <0x8000>;
+			pmsg-size = <0x8000>;
 		};
 
 		linux,cma {

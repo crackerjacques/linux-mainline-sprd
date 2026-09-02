@@ -884,9 +884,6 @@ static int __maybe_unused gnss_download_firmware(void)
 	if (err < 0) {
 		pr_err("%s no find gnssmodem.bin err:%d(ignore)\n",
 			__func__, err);
-		marlin_dev->is_gnss_in_sysfs = true;
-		err = gnss_download_from_partition();
-
 		return err;
 	}
 
@@ -981,9 +978,6 @@ static int btwifi_download_firmware(void)
 #endif
 	if (err < 0) {
 		pr_err("no find wcnmodem.bin errno:(%d)(ignore!!)\n", err);
-		marlin_dev->is_btwf_in_sysfs = true;
-		err = marlin_download_from_partition();
-
 		return err;
 	}
 

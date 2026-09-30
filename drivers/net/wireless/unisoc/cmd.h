@@ -41,6 +41,7 @@ int sc23xx_download_config_section(struct sc23xx_dev *sdev, u32 section,
 int sc23xx_download_ini_section(struct sc23xx_dev *sdev, u32 section,
 				const void *data, u16 size);
 int sc23xx_get_fw_info(struct sc23xx_dev *sdev);
+int sc23xx_cmd_notify_ip(struct sc23xx_vif *vif, const u8 *ip, u8 len);
 
 void sc23xx_cmd_tx_addba_req(struct work_struct *work);
 

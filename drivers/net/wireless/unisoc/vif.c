@@ -298,6 +298,16 @@ struct sc23xx_vif *sc23xx_vif_new(struct sc23xx_dev *sdev, const char *name,
 	if (test_bit(SC23XX_FLAG_USE_ALT_MAC, &vif->flags))
 		mac_addr[5] ^= 0x70;
 	eth_hw_addr_set(ndev, mac_addr);
+	/*
+	 * A made-up address has to be reported as such, or userspace takes it
+	 * for a burned-in one and leaves it alone. With NET_ADDR_RANDOM set,
+	 * systemd's default MACAddressPolicy=persistent replaces it before the
+	 * interface comes up with one derived from the machine-id, so the
+	 * address - and with it the DHCP lease and every peer's ARP entry -
+	 * stops changing on each boot.
+	 */
+	if (sdev->mac_addr_random)
+		ndev->addr_assign_type = NET_ADDR_RANDOM;
 
 	ret = cfg80211_register_netdevice(ndev);
 	if (ret)

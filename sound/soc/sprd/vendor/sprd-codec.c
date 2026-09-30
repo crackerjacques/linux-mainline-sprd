@@ -3877,19 +3877,35 @@ static void codec_reconfig_dai_rate(struct snd_soc_component *codec)
 	}
 
 	/*
-	 * If fixed_rates is provided, tell user that this codec supports
-	 * all kinds of rates.
+	 * If fixed_rates is provided, the converter runs at that rate and
+	 * nothing else: sprd_codec_pcm_hw_params() discards params_rate()
+	 * in favour of it, and the AP playback path has no SRC to make up
+	 * the difference (ap_hw_params() only programs one for capture).
+	 * Advertise the fixed rate alone so the core resamples for us -
+	 * claiming SNDRV_PCM_RATE_CONTINUOUS here let any other rate be
+	 * accepted and then played back at the converter's speed.
 	 */
 	list_for_each_entry(dai, &codec->dai_list, list) {
-		if (fixed_rates[CODEC_PATH_DA])
-			dai->driver->playback.rates = SNDRV_PCM_RATE_CONTINUOUS;
-		if ((dai->driver->id == SPRD_CODEC_IIS0_ID &&
-		     fixed_rates[CODEC_PATH_AD]) ||
-		    (dai->driver->id != SPRD_CODEC_IIS0_ID &&
-		     fixed_rates[CODEC_PATH_AD1]))
-			dai->driver->capture.rates = SNDRV_PCM_RATE_CONTINUOUS;
-		else
+		unsigned int ad_fixed =
+			(dai->driver->id == SPRD_CODEC_IIS0_ID) ?
+			fixed_rates[CODEC_PATH_AD] : fixed_rates[CODEC_PATH_AD1];
+
+		if (fixed_rates[CODEC_PATH_DA]) {
+			dai->driver->playback.rates = snd_pcm_rate_to_rate_bit(
+				fixed_rates[CODEC_PATH_DA]);
+			dai->driver->playback.rate_min =
+				fixed_rates[CODEC_PATH_DA];
+			dai->driver->playback.rate_max =
+				fixed_rates[CODEC_PATH_DA];
+		}
+		if (ad_fixed) {
+			dai->driver->capture.rates =
+				snd_pcm_rate_to_rate_bit(ad_fixed);
+			dai->driver->capture.rate_min = ad_fixed;
+			dai->driver->capture.rate_max = ad_fixed;
+		} else {
 			dai->driver->capture.rates &= ~unsupported_rates;
+		}
 	}
 }
 

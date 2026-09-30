@@ -285,6 +285,15 @@ static int asoc_sprd_card_dai_link_of_misc(struct device_node *node,
 		dai_link->dynamic = !!val[0];
 	pr_debug("%s dynamic: %u\n", __func__, dai_link->dynamic);
 
+	/*
+	 * A frontend that does not merge its backends' rate constraint
+	 * advertises the raw FE range (8k-192k continuous) whatever the
+	 * codec behind it can actually do, and userspace picks a rate the
+	 * hardware then silently ignores.
+	 */
+	if (dai_link->dynamic)
+		dai_link->dpcm_merged_rate = 1;
+
 	ret = of_property_read_u32(node, "no-pcm", val);
 	if (ret) {
 		if (ret != -EINVAL)

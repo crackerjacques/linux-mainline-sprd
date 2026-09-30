@@ -3,6 +3,9 @@
  * Copyright (C) 2025 Otto Pflüger
  */
 
+#include <linux/inetdevice.h>
+#include <linux/module.h>
+
 #include "cmd.h"
 #include "txrx.h"
 #include "vif.h"
@@ -55,6 +58,41 @@ static const char *sc23xx_vif_idx_to_string(u8 idx)
 	return "unknown type";
 }
 
+/*
+ * Tell the firmware about the addresses the interface already has.
+ *
+ * The inetaddr notifier below only fires when an address is added or removed,
+ * and IPv4 addresses survive ndo_stop/ndo_open - so after "ip link set wlan0
+ * down; ip link set wlan0 up", or when an address was configured before the
+ * link came up, no event ever arrives and the firmware is never told. It then
+ * goes back to delivering no broadcast to the host, which is the failure this
+ * whole patch exists to fix. ndo_open runs under RTNL.
+ */
+static void sc23xx_notify_configured_ips(struct sc23xx_vif *vif,
+					 struct net_device *ndev)
+{
+	const struct in_ifaddr *ifa;
+	struct in_device *in_dev;
+	int ret;
+
+	if (vif->wdev.iftype != NL80211_IFTYPE_STATION &&
+	    vif->wdev.iftype != NL80211_IFTYPE_P2P_CLIENT)
+		return;
+
+	in_dev = __in_dev_get_rtnl(ndev);
+	if (!in_dev)
+		return;
+
+	in_dev_for_each_ifa_rtnl(ifa, in_dev) {
+		ret = sc23xx_cmd_notify_ip(vif, (const u8 *)&ifa->ifa_address,
+					   sizeof(ifa->ifa_address));
+		if (ret)
+			netdev_warn(ndev,
+				    "failed to notify firmware of %pI4: %d\n",
+				    &ifa->ifa_address, ret);
+	}
+}
+
 static int sc23xx_open(struct net_device *ndev)
 {
 	struct sc23xx_vif *vif = netdev_priv(ndev);
@@ -81,6 +119,8 @@ static int sc23xx_open(struct net_device *ndev)
 			  "failed to send initial regdomain to firmware\n");
 		return ret;
 	}
+
+	sc23xx_notify_configured_ips(vif, ndev);
 
 	return 0;
 }
@@ -353,3 +393,54 @@ struct sc23xx_vif *sc23xx_get_vif(struct sc23xx_dev *sdev, int idx)
 
 	return vif;
 }
+
+/*
+ * Hand the station's IPv4 address to the firmware once the stack configures
+ * it (CMD_NOTIFY_IP_ACQUIRED). The vendor driver does this from the same
+ * notifier; without it the firmware never learns the host's address.
+ */
+static int sc23xx_inetaddr_event(struct notifier_block *nb,
+				 unsigned long event, void *ptr)
+{
+	struct in_ifaddr *ifa = ptr;
+	struct net_device *ndev = ifa->ifa_dev->dev;
+	struct sc23xx_vif *vif;
+	int ret;
+
+	if (ndev->netdev_ops != &sc23xx_netdev_ops || event != NETDEV_UP)
+		return NOTIFY_DONE;
+
+	vif = netdev_priv(ndev);
+	if (vif->wdev.iftype != NL80211_IFTYPE_STATION &&
+	    vif->wdev.iftype != NL80211_IFTYPE_P2P_CLIENT)
+		return NOTIFY_DONE;
+	if (!test_bit(SC23XX_FLAG_OPENED, &vif->flags))
+		return NOTIFY_DONE;
+
+	ret = sc23xx_cmd_notify_ip(vif, (const u8 *)&ifa->ifa_address,
+				   sizeof(ifa->ifa_address));
+	if (ret)
+		netdev_warn(ndev, "failed to notify firmware of %pI4: %d\n",
+			    &ifa->ifa_address, ret);
+	else
+		netdev_dbg(ndev, "notified firmware of %pI4\n",
+			   &ifa->ifa_address);
+
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block sc23xx_inetaddr_nb = {
+	.notifier_call = sc23xx_inetaddr_event,
+};
+
+static int __init sc23xx_vif_init(void)
+{
+	return register_inetaddr_notifier(&sc23xx_inetaddr_nb);
+}
+module_init(sc23xx_vif_init);
+
+static void __exit sc23xx_vif_exit(void)
+{
+	unregister_inetaddr_notifier(&sc23xx_inetaddr_nb);
+}
+module_exit(sc23xx_vif_exit);

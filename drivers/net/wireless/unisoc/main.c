@@ -141,8 +141,8 @@ static int sc23xx_scan(struct wiphy *wiphy, struct cfg80211_scan_request *reques
 
 	mutex_lock(&vif->scan_lock);
 	if (vif->scan_req) {
-		ret = -EBUSY;
-		goto err_out;
+		mutex_unlock(&vif->scan_lock);
+		return -EBUSY;
 	}
 
 	vif->scan_req = request;
@@ -152,18 +152,23 @@ static int sc23xx_scan(struct wiphy *wiphy, struct cfg80211_scan_request *reques
 		ret = sc23xx_cmd_set_probe_req_ie(vif, request->ie,
 						  request->ie_len);
 		if (ret)
-			goto err_out;
+			goto err_drop;
 	}
 
 	ret = sc23xx_cmd_scan(vif, request);
-	if (ret) {
-		sc23xx_notify_scan_done(vif, true);
-		return ret;
-	}
+	if (ret)
+		goto err_drop;
 
 	return 0;
 
-err_out:
+err_drop:
+	/*
+	 * cfg80211 owns the request again the moment ->scan() returns an
+	 * error, so drop our pointer rather than handing it back later
+	 * through cfg80211_scan_done().
+	 */
+	mutex_lock(&vif->scan_lock);
+	vif->scan_req = NULL;
 	mutex_unlock(&vif->scan_lock);
 	return ret;
 }

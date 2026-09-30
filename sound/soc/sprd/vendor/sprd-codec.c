@@ -1375,6 +1375,7 @@ static int sprd_codec_set_sample_rate(struct snd_soc_component *codec,
 {
 	int i = 0;
 	unsigned int val = 0;
+	bool found = false;
 	int ret;
 	struct sprd_codec_rate_tbl {
 		u32 rate; /* 8000, 11025, ... */
@@ -1399,11 +1400,14 @@ static int sprd_codec_set_sample_rate(struct snd_soc_component *codec,
 	}
 
 	for (i = 0; i < ARRAY_SIZE(rate_tbl); i++) {
-		if (rate_tbl[i].rate == rate)
+		if (rate_tbl[i].rate == rate) {
 			val = rate_tbl[i].sprd_rate;
+			found = true;
+			break;
+		}
 	}
 
-	if (val)
+	if (found)
 		snd_soc_component_update_bits(codec, SOC_REG(AUD_DAC_CTL), mask,
 				    val << shift);
 	else

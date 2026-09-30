@@ -836,7 +836,7 @@ static int sprd_pcm_dma_step_config(struct sprd_pcm_dma_params *dma_data,
 	} else {
 		sp_asoc_pr_dbg("Non-interleaved Access\n");
 		step = (dma_data->use_mcdt == 1) ?
-			DMA_SLAVE_BUSWIDTH_4_BYTES : DMA_SLAVE_BUSWIDTH_2_BYTES;
+			DMA_SLAVE_BUSWIDTH_4_BYTES : desc->datawidth;
 		desc->src_step = playback ? step : 0;
 		desc->des_step = playback ? 0 : step;
 		sp_asoc_pr_info("desc->src_step=%d, dest_step=%d\n",

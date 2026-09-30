@@ -1561,8 +1561,6 @@ static int sprd_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 	 */
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
-	case SNDRV_PCM_TRIGGER_RESUME:
-	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
 		normal_dma_protect_spin_lock(substream);
 		if (rtd->dma_tx_des[0] == NULL) {
 			normal_dma_protect_spin_unlock(substream);
@@ -1582,6 +1580,32 @@ static int sprd_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 		}
 
 		pr_info("pcm Start\n");
+		normal_dma_protect_spin_unlock(substream);
+		break;
+	case SNDRV_PCM_TRIGGER_RESUME:
+	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
+		/*
+		 * PAUSE_PUSH and SUSPEND leave the hardware pause bit set with
+		 * the descriptor still loaded, so there is nothing to submit
+		 * here. Only sprd_dma_start() rewrites SPRD_DMA_CHN_PAUSE, and
+		 * sprd_dma_issue_pending() skips it while cur_desc is still
+		 * set - re-submitting therefore queues a second descriptor and
+		 * leaves the channel paused for good. Lift the pause instead,
+		 * which is what the in-tree sprd-pcm-dma.c does for the same
+		 * controller.
+		 */
+		normal_dma_protect_spin_lock(substream);
+		if (rtd->dma_chn[0] == NULL) {
+			normal_dma_protect_spin_unlock(substream);
+			pr_info("%s dma_chn[0] is null ret=%#x, %d\n",
+				__func__, -ENODATA, -ENODATA);
+			return -ENODATA;
+		}
+		for (i = 0; i < rtd->hw_chan; i++) {
+			if (rtd->dma_chn[i])
+				dmaengine_resume(rtd->dma_chn[i]);
+		}
+		pr_info("pcm Resume\n");
 		normal_dma_protect_spin_unlock(substream);
 		break;
 	case SNDRV_PCM_TRIGGER_STOP:

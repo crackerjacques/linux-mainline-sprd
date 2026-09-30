@@ -662,6 +662,7 @@ int sc23xx_register_device(struct sc23xx_dev *sdev)
 	 */
 	if (is_zero_ether_addr(sdev->mac_addr)) {
 		eth_random_addr(sdev->mac_addr);
+		sdev->mac_addr_random = true;
 		wiphy_info(sdev->wiphy, "using random MAC address %pM\n",
 			   sdev->mac_addr);
 	}

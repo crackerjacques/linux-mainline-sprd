@@ -803,6 +803,25 @@ int sc23xx_cmd_set_multicast(struct sc23xx_vif *vif)
 	return sc23xx_send_cmd_wait(vif->sdev, skb, NULL, 0);
 }
 
+/*
+ * Tell the firmware the interface's IP address. The vendor driver sends this
+ * from an inetaddr notifier as soon as the address is configured; the
+ * payload is just the raw address, 4 bytes for IPv4 and 16 for IPv6, and the
+ * firmware tells them apart by length.
+ */
+int sc23xx_cmd_notify_ip(struct sc23xx_vif *vif, const u8 *ip, u8 len)
+{
+	struct sk_buff *skb;
+
+	skb = sc23xx_cmd_alloc_skb(CMD_NOTIFY_IP_ACQUIRED, len, vif->idx);
+	if (!skb)
+		return -ENOMEM;
+
+	skb_put_data(skb, ip, len);
+
+	return sc23xx_send_cmd_wait(vif->sdev, skb, NULL, 0);
+}
+
 int sc23xx_cmd_set_mac_addr(struct sc23xx_vif *vif, const u8 *mac_addr)
 {
 	struct sc23xx_req_set_mac_addr *req;

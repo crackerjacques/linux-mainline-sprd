@@ -2153,9 +2153,17 @@ static void pre_gnss_download_firmware_orig(struct work_struct *work)
 }
 #endif /* GNSS download path disabled */
 
+/*
+ * Set when pre_btwifi_download_sdio() could not bring the chip up, so the
+ * waiters below can tell a real completion from the one we now signal on the
+ * failure path. Only ever touched under marlin_dev->power_lock.
+ */
+static bool marlin_btwf_download_failed;
+
 static void pre_btwifi_download_sdio(struct work_struct *work)
 {
 	struct wcn_match_data *g_match_config = get_wcn_match_config();
+	bool failed = false;
 
 	if (btwifi_download_firmware() == 0 &&
 		marlin_start_run() == 0) {
@@ -2171,9 +2179,31 @@ static void pre_btwifi_download_sdio(struct work_struct *work)
 		check_cp_ready();
 		complete(&marlin_dev->download_done);
 		wcn_slpinfo_statistics(WCN_SOURCE_BTWF, true);
+	} else {
+		/*
+		 * Without a completion the waiters burn the full
+		 * POWERUP_WAIT_MS (60s). The built-in WCN core probes from the
+		 * initramfs, where wcnmodem.bin is absent on purpose, so that
+		 * cost the boot two 60-second stalls before the rootfs was even
+		 * mounted. It is signalled below, after the runtime get.
+		 */
+		failed = true;
+		marlin_btwf_download_failed = true;
 	}
 	/* Runtime PM is useless, mainly to enable sdio_func1 and rx irq */
 	sprdwcn_bus_runtime_get();
+	if (failed) {
+		/*
+		 * Only now, after the get: the waiter's error path puts this
+		 * same reference, and on SDIO that put disables the rx IRQ the
+		 * get enables - completing first lets the two land in the other
+		 * order and leaves the IRQ enabled after teardown. Nothing
+		 * below applies either: wcn_firmware_init() would send four AT
+		 * commands to a chip that is already going down.
+		 */
+		complete(&marlin_dev->download_done);
+		return;
+	}
 	if (g_match_config && !g_match_config->unisoc_wcn_pcie) {
 		pr_info("%s is not pcie\n", __func__);
 		wcn_firmware_init();
@@ -2505,11 +2535,12 @@ static int marlin_set_power(enum wcn_sub_sys subsys, int val)
 			marlin_dev->first_power_on_ready = 1;
 
 			pr_info("then marlin start to download\n");
+			marlin_btwf_download_failed = false;
 			schedule_work(&marlin_dev->download_wq);
 			timeleft = wait_for_completion_timeout(
 				&marlin_dev->download_done,
 				msecs_to_jiffies(POWERUP_WAIT_MS));
-			if (!timeleft) {
+			if (!timeleft || marlin_btwf_download_failed) {
 				pr_err("marlin download timeout\n");
 				goto out;
 			}
@@ -2608,11 +2639,12 @@ static int marlin_set_power(enum wcn_sub_sys subsys, int val)
 			/* 5.1 first download marlin, and then download gnss */
 			if ((subsys == WCN_AUTO || subsys == MARLIN_GNSS)) {
 				pr_info("marlin start to download\n");
+				marlin_btwf_download_failed = false;
 				schedule_work(&marlin_dev->download_wq);
 				timeleft = wait_for_completion_timeout(
 					&marlin_dev->download_done,
 					msecs_to_jiffies(POWERUP_WAIT_MS));
-				if (!timeleft) {
+				if (!timeleft || marlin_btwf_download_failed) {
 					pr_err("marlin download timeout\n");
 					goto out;
 				}
@@ -2636,11 +2668,12 @@ static int marlin_set_power(enum wcn_sub_sys subsys, int val)
 			 */
 			else {
 				pr_info("only marlin start to download\n");
+				marlin_btwf_download_failed = false;
 				schedule_work(&marlin_dev->download_wq);
 				if (wait_for_completion_timeout(
 					&marlin_dev->download_done,
 					msecs_to_jiffies(POWERUP_WAIT_MS))
-					<= 0) {
+					<= 0 || marlin_btwf_download_failed) {
 
 					pr_err("marlin download timeout\n");
 					goto out;

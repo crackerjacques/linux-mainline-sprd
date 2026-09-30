@@ -90,6 +90,12 @@ static int sc23xx_close(struct net_device *ndev)
 	struct sc23xx_vif *vif = netdev_priv(ndev);
 	int ret;
 
+	/*
+	 * Retire any outstanding scan before cfg80211 gets NETDEV_DOWN and
+	 * finds rdev->scan_req un-notified (WARN in core.c), and before the
+	 * firmware's scan-done event can hand the stale request back.
+	 */
+	sc23xx_notify_scan_done(vif, true);
 	flush_workqueue(vif->sdev->evt_wq);
 
 	ret = sc23xx_cmd_close(vif);

@@ -23,7 +23,7 @@
 
 #define VBC_FIFO_FRAME_NUM		(80)
 
-#define VBC_BUFFER_BYTES_MAX		(64 * 1024)
+#define VBC_BUFFER_BYTES_MAX		(192 * 1024)
 
 #define I2S_BUFFER_BYTES_MAX	(64 * 1024)
 

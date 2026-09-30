@@ -114,6 +114,7 @@ struct sc23xx_dev {
 	u8 credit_capa;
 
 	u8 mac_addr[ETH_ALEN];
+	bool mac_addr_random;
 	struct ieee80211_supported_band band_2ghz;
 	struct ieee80211_supported_band band_5ghz;
 	u8 max_mc_mac_addrs;

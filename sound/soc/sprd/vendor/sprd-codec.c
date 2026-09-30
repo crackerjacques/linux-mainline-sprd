@@ -200,6 +200,24 @@ static void sprd_codec_psg_state_exit(struct snd_soc_component *codec);
 static unsigned long sprd_codec_dp_base;
 
 /*
+ * Covers the window between the power domain coming up and the core leaving
+ * deep sleep; agdsp_access_enable() has already asked for it.
+ */
+#define SPRD_CODEC_AGDSP_WAIT_US	20000
+static bool sprd_codec_wait_agdsp_access(void)
+{
+	unsigned int waited;
+
+	for (waited = 0; waited < SPRD_CODEC_AGDSP_WAIT_US; waited += 50) {
+		if (agdsp_can_access())
+			return true;
+		udelay(50);
+	}
+
+	return agdsp_can_access();
+}
+
+/*
  * Write-through shadow of the digital (DP) register window.
  *
  * The digital codec is audio-codec@33750000, which sits in the audcp power
@@ -3418,12 +3436,12 @@ static int sprd_codec_write(struct snd_soc_component *codec, unsigned int reg,
 			pr_err("%s, agdsp_access_enable failed!\n", __func__);
 			return ret;
 		}
-		/* see sprd_codec_read(): don't touch DP regs if audcp is asleep */
-		if (!agdsp_can_access()) {
-			pr_warn_ratelimited("%s: audcp not accessible, DP reg 0x%x write dropped\n",
-					    __func__, reg);
+		/* Fail loudly rather than reporting a dropped write as success. */
+		if (!sprd_codec_wait_agdsp_access()) {
+			pr_err_ratelimited("%s: audcp still asleep, DP reg 0x%x not written\n",
+					   __func__, reg);
 			agdsp_access_disable();
-			return 0;
+			return -EIO;
 		}
 		codec_digital_reg_enable(codec);
 		sp_asoc_pr_reg("D[0x%04x] R:[0x%08x]\n",

@@ -8355,6 +8355,8 @@ static int scene_fast_trigger(struct snd_pcm_substream *substream, int cmd,
 	} else {
 		trigger_lock_spin(scene_id, stream);
 		trigger_dec_ref(scene_id, stream);
+		if (trigger_get_ref(scene_id, stream) == 0)
+			ret = dsp_trigger(vbc_codec, scene_id, stream, up_down);
 		trigger_unlock_spin(scene_id, stream);
 	}
 

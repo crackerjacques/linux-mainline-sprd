@@ -408,7 +408,6 @@ static void sipc_sbuf_rpdev_release(struct device *dev)
 	struct rpmsg_device *rpdev = to_rpmsg_device(dev);
 	struct sipc_sbuf_device *sdev = rpdev_to_sbuf_device(rpdev);
 
-	kfree(rpdev->driver_override);
 	kfree(sdev);
 }
 

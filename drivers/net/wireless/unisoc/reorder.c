@@ -142,7 +142,14 @@ static void reorder_timeout(struct timer_list *t)
 	if (!count)
 		goto out;
 
-	wiphy_warn(r->sdev->wiphy, "timeout, some RX frames lost\n");
+	/*
+	 * A frame lost on the air is ordinary, and mac80211 treats it that way:
+	 * the same event goes through ht_dbg_ratelimited() in
+	 * ieee80211_sta_reorder_release(), so it is compiled out unless
+	 * MAC80211_HT_DEBUG is set and rate-limited even then. At warn level with
+	 * no limit it buries the panel, which is this board's only console.
+	 */
+	wiphy_dbg(r->sdev->wiphy, "timeout, some RX frames lost\n");
 	reorder_buf_advance(r, count, true, &deliver);
 
 	/*

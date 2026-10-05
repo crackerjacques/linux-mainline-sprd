@@ -440,9 +440,9 @@ struct wcn_dump_section_info {
 
 struct wcn_dump_head_info {
 	/* WCN_DUMP_VERSION_NAME */
-	u8 version[16];
+	u8 version[16] __nonstring;
 	/* WCN_DUMP_VERSION_SUB_NAME */
-	u8 sub_version[16];
+	u8 sub_version[16] __nonstring;
 	/* numbers of wcn_dump_section_info */
 	__le32 n_sec;
 	/* used to check if dump is full */
@@ -465,10 +465,8 @@ static int wcn_fill_dump_head_info(struct wcn_dump_mem_reg *mem_cfg, size_t cnt)
 		return -1;
 	}
 
-	strncpy(head->version, WCN_DUMP_VERSION_NAME,
-		strlen(WCN_DUMP_VERSION_NAME));
-	strncpy(head->sub_version, WCN_DUMP_VERSION_SUB_NAME,
-		strlen(WCN_DUMP_VERSION_SUB_NAME));
+	strtomem(head->version, WCN_DUMP_VERSION_NAME);
+	strtomem(head->sub_version, WCN_DUMP_VERSION_SUB_NAME);
 	head->n_sec = cpu_to_le32(cnt);
 	len = head_len;
 	for (i = 0; i < cnt; i++) {

@@ -396,7 +396,8 @@ int marlin_tsx_cali_data_read(struct tsx_data *p_tsx_data)
 	/* copy tsx_firmware->data to buffer */
 	size = sizeof(struct tsx_data);
 	pdata = (char *)p_tsx_data;
-	strncpy(pdata, tsx_firmware->data, size);
+	memcpy_and_pad(pdata, size, tsx_firmware->data,
+		       strnlen((const char *)tsx_firmware->data, size), 0);
 
 	release_firmware(tsx_firmware);
 	pr_info("read tsx cali, pdata = %p, p_tsx_data->dac = %02x\n", pdata,

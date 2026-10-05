@@ -207,8 +207,7 @@ void wcn_assert_interface(enum wcn_source_type type, char *str)
 			atomic_read(&mdbg_proc->async_assert.flag),
 			atomic_read(&mdbg_proc->async_assert.dev_lock));
 		mdbg_proc->async_assert.async_assert_type = type;
-		strncpy(mdbg_proc->async_assert.async_assert_str, str,
-				sizeof(mdbg_proc->async_assert.async_assert_str));
+		strscpy(mdbg_proc->async_assert.async_assert_str, str);
 		schedule_work(&mdbg_proc->async_assert.assert_wq);
 	} else
 		__wcn_assert_interface(type, str);

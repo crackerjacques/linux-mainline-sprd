@@ -975,10 +975,17 @@ static int btwifi_download_firmware(void)
 #ifdef FIRMWARE_PARTITION_DEBUG_EN
 	err = request_firmware_direct(&firmware, "wcnmodem.bin", NULL);
 #else
-	err = request_firmware(&firmware, "wcnmodem.bin", NULL);
+	/*
+	 * The first call is expected to fail: this runs before the rootfs is
+	 * mounted, and the firmware cannot be put in the initramfs - reachable
+	 * firmware makes the WCN core finish its bring-up there, which keeps udev
+	 * events outstanding until /init panics. The caller retries once the
+	 * rootfs is up, so do not let the loader warn about a planned miss.
+	 */
+	err = firmware_request_nowarn(&firmware, "wcnmodem.bin", NULL);
 #endif
 	if (err < 0) {
-		pr_err("no find wcnmodem.bin errno:(%d)(ignore!!)\n", err);
+		pr_info("wcnmodem.bin not available yet (%d), will retry\n", err);
 		return err;
 	}
 

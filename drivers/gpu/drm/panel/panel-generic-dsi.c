@@ -706,9 +706,10 @@ static int generic_panel_probe(struct mipi_dsi_device *dsi)
     struct generic_panel *ctx;
     int ret;
 
-    ctx = devm_kzalloc(dev, sizeof(*ctx), GFP_KERNEL);
-    if (!ctx)
-        return -ENOMEM;
+    ctx = devm_drm_panel_alloc(dev, struct generic_panel, panel,
+                               &generic_panel_funcs, DRM_MODE_CONNECTOR_DSI);
+    if (IS_ERR(ctx))
+        return PTR_ERR(ctx);
 
     ctx->enable_gpio = devm_gpiod_get_optional(dev, "enable", GPIOD_OUT_LOW);
     if (IS_ERR(ctx->enable_gpio)) {
@@ -764,9 +765,6 @@ static int generic_panel_probe(struct mipi_dsi_device *dsi)
     mipi_dsi_set_drvdata(dsi, ctx);
 
     dev_info(dev, "lanes %d, format %d, mode %lx\n", dsi->lanes, dsi->format, dsi->mode_flags);
-
-    drm_panel_init(&ctx->panel, &dsi->dev, &generic_panel_funcs,
-               DRM_MODE_CONNECTOR_DSI);
 
     /*
      * COLD-INIT EXPERIMENT (see WHAT-HAS-BEEN-TRIED.md "prepare_prev_first").

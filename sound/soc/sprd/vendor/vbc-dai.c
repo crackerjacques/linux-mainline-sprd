@@ -7412,9 +7412,18 @@ static int scene_normal_hw_params(struct snd_pcm_substream *substream,
 		normal_vbc_protect_mutex_lock(stream);
 		is_started = get_normal_p_running_status(stream);
 		if ((is_playback && is_started) ||
-				!is_playback)
+				!is_playback) {
 			ap_hw_params(vbc_codec, scene_id, stream,
 				     vbc_chan, rate, data_fmt);
+			/*
+			 * And tell the dsp as well. It owns the vbc side of
+			 * this path and scene_normal_trigger() already asks it
+			 * to start, so leaving out the hw params means it
+			 * starts on whatever a previous scene left behind.
+			 */
+			dsp_hw_params(vbc_codec, scene_id, stream,
+				      chan_cnt, rate, data_fmt);
+		}
 		if (is_playback) {
 			struct aud_pm_vbc *pm_vbc = aud_pm_vbc_get();
 

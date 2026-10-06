@@ -3874,16 +3874,26 @@ static int sys_iis_sel_put(struct snd_kcontrol *kcontrol,
 	value = ucontrol->value.enumerated.item[0];
 	sp_asoc_pr_dbg("%s, id=%d,value=%d, texts->texts[] =%s\n",
 		       __func__, id, value, texts->texts[value]);
-	vbc_codec->sys_iis_sel[id] = value;
 	sprintf(buf, "%s_%u", sys_iis_sel_txt[value], id);
 	state = pinctrl_lookup_state(vbc_codec->pctrl, buf);
 	if (IS_ERR(state)) {
-		pr_err("%s line=%d failed\n", __func__, __LINE__);
+		/*
+		 * These enums offer every IIS controller the SoC has for each
+		 * pin group, but a board only declares the states it actually
+		 * wires - and index 0 ("vbc_iis0") is the value the control
+		 * reports before anything sets it, so alsactl saves it and then
+		 * cannot restore it. Refusing is right; shouting about it once
+		 * per group on every boot is not.
+		 */
+		dev_dbg(codec->dev, "no pinctrl state \"%s\" on this board\n",
+			buf);
 		return -EINVAL;
 	}
 	ret =  pinctrl_select_state(vbc_codec->pctrl, state);
 	if (ret != 0)
 		pr_err("%s failed ret = %d\n", __func__, ret);
+	/* only now, so a refused put does not change what the get reports */
+	vbc_codec->sys_iis_sel[id] = value;
 
 	sp_asoc_pr_dbg("%s,soc iis%d -> %s\n", __func__, id, buf);
 

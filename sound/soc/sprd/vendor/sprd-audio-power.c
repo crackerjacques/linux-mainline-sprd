@@ -585,7 +585,7 @@ static int sprd_audio_power_config_reg_vars(void)
 	int ret = 0;
 
 	if (arch_audio_codec_get_regmap() != NULL) {
-		pr_info("%s regmap exist return 0\n", __func__);
+		pr_debug("%s regmap exist return 0\n", __func__);
 		return 0;
 	}
 
@@ -596,13 +596,15 @@ static int sprd_audio_power_config_reg_vars(void)
 	}
 	pdev = of_find_device_by_node(node);
 	if (unlikely(!pdev)) {
-		pr_err("ERR: [%s] this node has no pdev?!\n", __func__);
+		pr_debug("[%s] analog node has no device yet, deferring\n",
+			 __func__);
 		ret = -EPROBE_DEFER;
 		goto put_node;
 	}
 	adi_rgmp = dev_get_regmap(pdev->dev.parent, NULL);
 	if (!adi_rgmp) {
-		pr_err("ERR: [%s] spi device is not ready yet!\n", __func__);
+		pr_debug("[%s] spi device is not ready yet, deferring\n",
+			 __func__);
 		ret = -EPROBE_DEFER;
 		goto put_node;
 	}
@@ -636,10 +638,9 @@ static int sprd_audio_power_probe(struct platform_device *pdev)
 	sp_asoc_pr_info("Probe %d\n", id);
 
 	ret = sprd_audio_power_config_reg_vars();
-	if (ret) {
-		pr_err("%s: config register variables failed!\n", __func__);
-		return ret;
-	}
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret,
+				     "cannot reach the codec register window\n");
 
 	initdata = pdev->dev.platform_data;
 	for (i = 0, template = NULL; i < ARRAY_SIZE(sprd_audio_power_of_match);

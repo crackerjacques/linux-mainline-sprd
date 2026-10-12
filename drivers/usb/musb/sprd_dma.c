@@ -11,6 +11,7 @@
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
+#include <linux/moduleparam.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include "musb_core.h"
@@ -62,6 +63,19 @@ static void dma_controller_stop(struct sprd_musb_dma_controller *controller)
 	}
 }
 
+/*
+ * On ums512 the host side programs a TX channel and the engine never raises
+ * the link-list end interrupt for it, so the URB never completes, the netdev
+ * watchdog fires after five seconds and r8152 resets the device for ever.
+ * Receive on the same engine is fine. Refusing the channel here makes
+ * musb_ep_program() fall back to loading the FIFO by PIO, which is a path
+ * musb_host.c already supports, so this is a way to tell the two apart on
+ * hardware without rebuilding.
+ */
+static bool tx_dma = true;
+module_param(tx_dma, bool, 0644);
+MODULE_PARM_DESC(tx_dma, "use the DMA engine for host TX (0 falls back to PIO)");
+
 static struct dma_channel *dma_channel_allocate(struct dma_controller *c,
 				struct musb_hw_ep *hw_ep, u8 transmit)
 {
@@ -70,6 +84,9 @@ static struct dma_channel *dma_channel_allocate(struct dma_controller *c,
 	struct sprd_musb_dma_channel *musb_channel = NULL;
 	struct dma_channel *channel = NULL;
 	u8 bit = hw_ep->epnum + (transmit ? 0 : 15);
+
+	if (transmit && !tx_dma)
+		return NULL;
 
 	if (controller->used_channels & (1 << bit))
 		return NULL;

@@ -898,6 +898,13 @@ static const struct regulator_desc bq2415x_vbus_desc = {
 	.ops		= &bq2415x_vbus_ops,
 	.fixed_uV	= 5000000,
 	.n_voltages	= 1,
+	/*
+	 * Measured on a T618 handheld: REG_STATUS reports the boost up about
+	 * 270ms after OPA_MODE is written. Without this, regulator_enable()
+	 * returns while the rail is still coming up and the consumer starts
+	 * using a port that has no power yet.
+	 */
+	.enable_time	= 300000,
 };
 
 static int bq2415x_register_vbus_regulator(struct bq2415x_device *bq)

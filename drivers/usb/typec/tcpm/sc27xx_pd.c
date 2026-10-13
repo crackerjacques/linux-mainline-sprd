@@ -456,15 +456,24 @@ static int sc27xx_pd_set_vbus(struct tcpc_dev *tcpc, bool on, bool charge)
 	if (!pd->vbus || pd->vbus_on == on)
 		goto out;
 
-	pd->vbus_on = on;
-
 	if (on)
 		ret = regulator_enable(pd->vbus);
 	else
 		ret = regulator_disable(pd->vbus);
 
-	if (ret < 0)
+	if (ret < 0) {
+		/*
+		 * Leave vbus_on alone, so the next call actually retries. Had
+		 * it been set up front, the test above would short-circuit for
+		 * ever after one failure and hand tcpm a success while the
+		 * port stayed dead.
+		 */
+		dev_err(pd->dev, "cannot turn VBUS %s: %d\n",
+			on ? "on" : "off", ret);
 		goto out;
+	}
+
+	pd->vbus_on = on;
 
 	/* no VBUS interrupts are sent, so polling is needed */
 	if (!pd->detect_pending) {

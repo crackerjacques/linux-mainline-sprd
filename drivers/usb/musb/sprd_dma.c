@@ -212,6 +212,29 @@ static int dma_channel_abort(struct dma_channel *channel)
 	u8 bchannel = musb_channel->idx;
 	int offset;
 	u16 csr;
+	u32 pause;
+
+	/*
+	 * Ask the engine to clear the channel. It answers with
+	 * CHN_CLEAR_INT_MASK_STATUS, and sprd_musb_dma_interrupt() disables
+	 * the channel from there; configure_channel() clears a CHN_CLR left
+	 * over from this before starting the channel again. Both of those
+	 * halves are already here, but nothing asked for the clear, so the
+	 * interrupt never came, the channel stayed enabled on a descriptor
+	 * that had just been zeroed, and configure_channel() only ORs CHN_EN
+	 * back into a register where it is already set -- no edge, no
+	 * transfer. Anything submitted afterwards never completes.
+	 *
+	 * The core also sets MUSB_DMA_STATUS_CORE_ABORT before aborting on
+	 * its error paths, which is every abort the host side does, so the
+	 * clear has to cover that status too.
+	 */
+	if (channel->status == MUSB_DMA_STATUS_BUSY ||
+	    channel->status == MUSB_DMA_STATUS_CORE_ABORT) {
+		pause = musb_readl(mbase, MUSB_DMA_CHN_PAUSE(bchannel));
+		pause |= CHN_CLR;
+		musb_writel(mbase, MUSB_DMA_CHN_PAUSE(bchannel), pause);
+	}
 
 	if (channel->status == MUSB_DMA_STATUS_BUSY) {
 		if (musb_channel->transmit) {

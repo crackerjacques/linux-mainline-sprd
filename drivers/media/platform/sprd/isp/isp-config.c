@@ -58,7 +58,7 @@ static int sprd_isp_cfg_g_fmt(struct file *file, void *fh,
 {
 	static const struct v4l2_meta_format mfmt = {
 		.dataformat = V4L2_META_FMT_SPRD_ISP_CFG,
-		.buffersize = v4l2_isp_params_buffer_size(SPRD_ISP_MAX_CONFIG_SIZE),
+		.buffersize = v4l2_isp_buffer_size(SPRD_ISP_MAX_CONFIG_SIZE),
 	};
 
 	f->fmt.meta = mfmt;
@@ -75,13 +75,13 @@ static int sprd_isp_cfg_queue_setup(struct vb2_queue *q,
 	if (*num_planes && *num_planes > 1)
 		return -EINVAL;
 
-	if (sizes[0] && sizes[0] < v4l2_isp_params_buffer_size(SPRD_ISP_MAX_CONFIG_SIZE))
+	if (sizes[0] && sizes[0] < v4l2_isp_buffer_size(SPRD_ISP_MAX_CONFIG_SIZE))
 		return -EINVAL;
 
 	*num_planes = 1;
 
 	if (!sizes[0])
-		sizes[0] = v4l2_isp_params_buffer_size(SPRD_ISP_MAX_CONFIG_SIZE);
+		sizes[0] = v4l2_isp_buffer_size(SPRD_ISP_MAX_CONFIG_SIZE);
 
 	return 0;
 }
@@ -91,7 +91,7 @@ static int sprd_isp_cfg_buf_init(struct vb2_buffer *vb)
 	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
 	struct sprd_isp_config_buffer *buf = to_isp_config_buf(vbuf);
 
-	buf->config = kvmalloc(v4l2_isp_params_buffer_size(SPRD_ISP_MAX_CONFIG_SIZE),
+	buf->config = kvmalloc(v4l2_isp_buffer_size(SPRD_ISP_MAX_CONFIG_SIZE),
 			       GFP_KERNEL);
 	if (!buf->config)
 		return -ENOMEM;
@@ -114,7 +114,7 @@ static int sprd_isp_cfg_buf_prepare(struct vb2_buffer *vb)
 	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
 	struct sprd_isp_config_buffer *buf = to_isp_config_buf(vbuf);
 	struct v4l2_isp_params_buffer *config = vb2_plane_vaddr(vb, 0);
-	size_t buffer_size = v4l2_isp_params_buffer_size(SPRD_DCAM_MAX_CONFIG_SIZE);
+	size_t buffer_size = v4l2_isp_buffer_size(SPRD_DCAM_MAX_CONFIG_SIZE);
 	int ret;
 
 	ret = v4l2_isp_params_validate_buffer_size(node->isp->dev, vb, buffer_size);

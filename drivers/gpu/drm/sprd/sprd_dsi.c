@@ -971,7 +971,8 @@ static void sprd_dsi_reset(struct dsi_context *ctx)
 	udelay(10);
 }
 
-static void sprd_dsi_bridge_pre_enable(struct drm_bridge *bridge)
+static void sprd_dsi_bridge_pre_enable(struct drm_bridge *bridge,
+				       struct drm_atomic_commit *atomic_state)
 {
 	struct sprd_dsi *dsi = bridge_to_dsi(bridge);
 	struct dsi_context *ctx = &dsi->ctx;
@@ -1025,7 +1026,8 @@ static void sprd_dsi_bridge_pre_enable(struct drm_bridge *bridge)
 	sprd_dsi_set_work_mode(ctx, DSI_MODE_CMD);
 }
 
-static void sprd_dsi_bridge_enable(struct drm_bridge *bridge)
+static void sprd_dsi_bridge_enable(struct drm_bridge *bridge,
+				   struct drm_atomic_commit *atomic_state)
 {
 	struct sprd_dsi *dsi = bridge_to_dsi(bridge);
 	struct dsi_context *ctx = &dsi->ctx;
@@ -1053,7 +1055,8 @@ static void sprd_dsi_bridge_enable(struct drm_bridge *bridge)
 	}
 }
 
-static void sprd_dsi_bridge_disable(struct drm_bridge *bridge)
+static void sprd_dsi_bridge_disable(struct drm_bridge *bridge,
+				    struct drm_atomic_commit *atomic_state)
 {
 	struct sprd_dsi *dsi = bridge_to_dsi(bridge);
 	struct dsi_context *ctx = &dsi->ctx;
@@ -1064,7 +1067,8 @@ static void sprd_dsi_bridge_disable(struct drm_bridge *bridge)
 	sprd_dsi_set_work_mode(ctx, DSI_MODE_CMD);
 }
 
-static void sprd_dsi_bridge_post_disable(struct drm_bridge *bridge)
+static void sprd_dsi_bridge_post_disable(struct drm_bridge *bridge,
+					 struct drm_atomic_commit *atomic_state)
 {
 	struct sprd_dsi *dsi = bridge_to_dsi(bridge);
 	struct dsi_context *ctx = &dsi->ctx;
@@ -1076,12 +1080,12 @@ static void sprd_dsi_bridge_post_disable(struct drm_bridge *bridge)
 }
 
 static const struct drm_bridge_funcs sprd_dsi_bridge_funcs = {
-	.attach		= sprd_dsi_bridge_attach,
-	.mode_set	= sprd_dsi_bridge_mode_set,
-	.pre_enable	= sprd_dsi_bridge_pre_enable,
-	.enable		= sprd_dsi_bridge_enable,
-	.disable	= sprd_dsi_bridge_disable,
-	.post_disable	= sprd_dsi_bridge_post_disable,
+	.attach			= sprd_dsi_bridge_attach,
+	.mode_set		= sprd_dsi_bridge_mode_set,
+	.atomic_pre_enable	= sprd_dsi_bridge_pre_enable,
+	.atomic_enable		= sprd_dsi_bridge_enable,
+	.atomic_disable		= sprd_dsi_bridge_disable,
+	.atomic_post_disable	= sprd_dsi_bridge_post_disable,
 };
 
 static int sprd_dsi_bridge_init(struct sprd_dsi *dsi,

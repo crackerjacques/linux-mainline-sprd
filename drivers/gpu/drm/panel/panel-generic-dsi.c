@@ -23,6 +23,7 @@
 
 #include <drm/drm_mipi_dsi.h>
 #include <drm/drm_modes.h>
+#include <drm/drm_of.h>
 #include <drm/drm_panel.h>
 
 #define DRIVER_NAME "panel-generic-dsi"
@@ -305,7 +306,7 @@ int panel_description_foreach(struct mipi_dsi_device *dsi, struct generic_panel 
 
         release_firmware(fw);
     } else {
-        //ret = of_drm_get_panel_orientation(dev->of_node, &ctx->orientation);
+        //ret = drm_of_get_panel_orientation(dev->of_node, &ctx->orientation);
         const char *line;
         char * buf;
         size_t linescnt, i;
@@ -739,7 +740,7 @@ static int generic_panel_probe(struct mipi_dsi_device *dsi)
         return ret;
     }
 
-    ret = of_drm_get_panel_orientation(dev->of_node, &ctx->orientation);
+    ret = drm_of_get_panel_orientation(dev->of_node, &ctx->orientation);
     if (ret < 0) {
         dev_err(dev, "%pOF: failed to get orientation %d\n", dev->of_node, ret);
         return ret;

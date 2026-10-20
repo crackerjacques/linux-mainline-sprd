@@ -233,9 +233,11 @@ static int icnl9916_panel_probe(struct mipi_dsi_device *dsi)
 	struct icnl9916_panel *ctx;
 	int ret;
 
-	ctx = devm_kzalloc(dev, sizeof(*ctx), GFP_KERNEL);
-	if (!ctx)
-		return -ENOMEM;
+	ctx = devm_drm_panel_alloc(dev, struct icnl9916_panel, panel,
+				   &icnl9916_panel_panel_funcs,
+				   DRM_MODE_CONNECTOR_DSI);
+	if (IS_ERR(ctx))
+		return PTR_ERR(ctx);
 
 	ctx->reset = devm_reset_control_get_shared(dev, NULL);
 	if (IS_ERR(ctx->reset))
@@ -252,8 +254,6 @@ static int icnl9916_panel_probe(struct mipi_dsi_device *dsi)
 	dsi->hs_rate = 691000000;
 	dsi->lp_rate = 20000000;
 
-	drm_panel_init(&ctx->panel, dev, &icnl9916_panel_panel_funcs,
-		       DRM_MODE_CONNECTOR_DSI);
 	ctx->panel.prepare_prev_first = true;
 
 	ret = drm_panel_of_backlight(&ctx->panel);

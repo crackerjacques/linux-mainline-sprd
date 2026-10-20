@@ -268,7 +268,7 @@ static int sc23xx_change_virtual_intf(struct wiphy *wiphy, struct net_device *nd
 }
 
 static int sc23xx_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
-			  struct cfg80211_mgmt_tx_params *params, u64 *cookie)
+			  struct cfg80211_mgmt_tx_params *params, u64 cookie)
 {
 	struct sc23xx_vif *vif = netdev_priv(wdev->netdev);
 

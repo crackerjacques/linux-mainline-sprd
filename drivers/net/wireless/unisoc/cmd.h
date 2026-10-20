@@ -30,7 +30,7 @@ int sc23xx_cmd_sched_scan_stop(struct sc23xx_vif *vif);
 int sc23xx_cmd_set_rekey_data(struct sc23xx_vif *vif,
 			      struct cfg80211_gtk_rekey_data *data);
 int sc23xx_cmd_mgmt_tx(struct sc23xx_vif *vif, struct cfg80211_mgmt_tx_params *params,
-		       u64 *cookie);
+		       u64 cookie);
 int sc23xx_cmd_set_multicast(struct sc23xx_vif *vif);
 int sc23xx_cmd_set_mac_addr(struct sc23xx_vif *vif, const u8 *mac_addr);
 int sc23xx_cmd_addba_rsp(struct sc23xx_dev *sdev, struct sc23xx_sta *sta,

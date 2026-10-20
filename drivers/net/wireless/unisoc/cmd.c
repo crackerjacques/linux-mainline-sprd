@@ -755,7 +755,7 @@ int sc23xx_cmd_sched_scan_stop(struct sc23xx_vif *vif)
 }
 
 int sc23xx_cmd_mgmt_tx(struct sc23xx_vif *vif, struct cfg80211_mgmt_tx_params *params,
-		       u64 *cookie)
+		       u64 cookie)
 {
 	struct sc23xx_req_mgmt_tx *req;
 	struct sk_buff *skb;
@@ -774,7 +774,7 @@ int sc23xx_cmd_mgmt_tx(struct sc23xx_vif *vif, struct cfg80211_mgmt_tx_params *p
 	req->chan = params->chan->hw_value;
 	req->dont_wait_for_ack = params->dont_wait_for_ack;
 	put_unaligned_le32(params->wait, &req->wait);
-	put_unaligned_le64(*cookie, &req->cookie);
+	put_unaligned_le64(cookie, &req->cookie);
 	req->len = cpu_to_le16(params->len);
 
 	skb_put_data(skb, params->buf, params->len);

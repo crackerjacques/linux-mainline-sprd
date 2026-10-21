@@ -13,6 +13,7 @@
 #include <video/mipi_display.h>
 
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_atomic_state_helper.h>
 #include <drm/drm_bridge.h>
 #include <drm/drm_bridge_connector.h>
 #include <drm/drm_of.h>
@@ -1080,6 +1081,9 @@ static void sprd_dsi_bridge_post_disable(struct drm_bridge *bridge,
 }
 
 static const struct drm_bridge_funcs sprd_dsi_bridge_funcs = {
+	.atomic_create_state	= drm_atomic_helper_bridge_create_state,
+	.atomic_duplicate_state	= drm_atomic_helper_bridge_duplicate_state,
+	.atomic_destroy_state	= drm_atomic_helper_bridge_destroy_state,
 	.attach			= sprd_dsi_bridge_attach,
 	.mode_set		= sprd_dsi_bridge_mode_set,
 	.atomic_pre_enable	= sprd_dsi_bridge_pre_enable,

@@ -4180,6 +4180,41 @@ static int sprd_codec_ana_probe(struct platform_device *pdev)
 	return 0;
 }
 
+/*
+ * The digital codec sits in the audcp power domain, which only exists once
+ * sprd-audcp-boot has booted the DSP from firmware on the rootfs. Probing
+ * earlier makes the AGDSP wake below spin to its timeout with the access
+ * spinlock held (~9 s of stalled boot) and leaves the core unpinned, so wait
+ * for the domain provider to bind first.
+ */
+static int sprd_codec_wait_audcp(struct device_node *np)
+{
+	struct device_node *dig_np, *pd_np;
+	struct platform_device *pd_pdev;
+	int ret = 0;
+
+	dig_np = of_parse_phandle(np, "digital-codec", 0);
+	if (!dig_np)
+		return 0;
+	pd_np = of_parse_phandle(dig_np, "power-domains", 0);
+	of_node_put(dig_np);
+	if (!pd_np)
+		return 0;
+	if (!of_device_is_available(pd_np)) {
+		of_node_put(pd_np);
+		return 0;
+	}
+	pd_pdev = of_find_device_by_node(pd_np);
+	of_node_put(pd_np);
+	if (!pd_pdev)
+		return -EPROBE_DEFER;
+	if (!device_is_bound(&pd_pdev->dev))
+		ret = -EPROBE_DEFER;
+	put_device(&pd_pdev->dev);
+
+	return ret;
+}
+
 /* This @pdev is the one corresponding to analog part dt node. */
 static int sprd_codec_probe(struct platform_device *pdev)
 {
@@ -4200,6 +4235,10 @@ static int sprd_codec_probe(struct platform_device *pdev)
 		pr_err("%s: Only OF is supported yet!\n", __func__);
 		return -EINVAL;
 	}
+
+	ret = sprd_codec_wait_audcp(np);
+	if (ret)
+		return ret;
 
 	sprd_codec = devm_kzalloc(&pdev->dev,
 		sizeof(struct sprd_codec_priv), GFP_KERNEL);

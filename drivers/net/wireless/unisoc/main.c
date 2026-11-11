@@ -197,23 +197,28 @@ static int sc23xx_disconnect(struct wiphy *wiphy, struct net_device *netdev,
 }
 
 static int sc23xx_add_key(struct wiphy *wiphy, struct wireless_dev *wdev, int link_id,
-			  u8 key_index, bool pairwise, const u8 *mac_addr,
+			  u8 key_index, enum nl80211_key_type type,
+			  const u8 *mac_addr,
 			  struct key_params *params)
 {
 	struct sc23xx_vif *vif = netdev_priv(wdev->netdev);
 
-	return sc23xx_cmd_add_key(vif, key_index, pairwise, mac_addr, params);
+	return sc23xx_cmd_add_key(vif, key_index,
+				  type == NL80211_KEYTYPE_PAIRWISE, mac_addr,
+				  params);
 }
 
 static int sc23xx_del_key(struct wiphy *wiphy, struct wireless_dev *wdev, int link_id,
-			  u8 key_index, bool pairwise, const u8 *mac_addr)
+			  u8 key_index, enum nl80211_key_type type,
+			  const u8 *mac_addr)
 {
 	struct sc23xx_vif *vif = netdev_priv(wdev->netdev);
 
 	if (!test_bit(SC23XX_FLAG_OPENED, &vif->flags))
 		return 0;
 
-	return sc23xx_cmd_del_key(vif, key_index, pairwise, mac_addr);
+	return sc23xx_cmd_del_key(vif, key_index,
+				  type == NL80211_KEYTYPE_PAIRWISE, mac_addr);
 }
 
 static int sc23xx_set_default_key(struct wiphy *wiphy, struct net_device *netdev,

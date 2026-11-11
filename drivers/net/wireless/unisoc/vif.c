@@ -159,7 +159,7 @@ static void sc23xx_multicast_work(struct work_struct *work)
 	    !test_bit(SC23XX_FLAG_OPENED, &vif->flags))
 		return;
 
-	if (ndev->mc.count > vif->sdev->max_mc_mac_addrs) {
+	if (netdev_mc_count(ndev) > vif->sdev->max_mc_mac_addrs) {
 		netdev_err(ndev, "too many multicast addresses set\n");
 		return;
 	}

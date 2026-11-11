@@ -789,13 +789,13 @@ int sc23xx_cmd_set_multicast(struct sc23xx_vif *vif)
 	struct sk_buff *skb;
 
 	skb = sc23xx_cmd_alloc_skb(CMD_MULTICAST_FILTER,
-				   2 + ETH_ALEN * ndev->mc.count,
+				   2 + ETH_ALEN * netdev_mc_count(ndev),
 				   vif->idx);
 	if (!skb)
 		return -ENOMEM;
 
 	skb_put_u8(skb, 1);
-	skb_put_u8(skb, ndev->mc.count);
+	skb_put_u8(skb, netdev_mc_count(ndev));
 
 	netdev_for_each_mc_addr(ha, ndev)
 		skb_put_data(skb, ha->addr, ETH_ALEN);

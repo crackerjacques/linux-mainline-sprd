@@ -875,7 +875,7 @@ static int sprd_pcm_request_dma_channel(
 			break;
 		}
 
-		dma_chn_request = dma_request_slave_channel(platform->dev,
+		dma_chn_request = dma_request_chan(platform->dev,
 					 dma_data->used_dma_channel_name[i]);
 		if (IS_ERR_OR_NULL(dma_chn_request)) {
 			pr_err("ERR: request dma channel(%s) failed!(%ld)\n",
